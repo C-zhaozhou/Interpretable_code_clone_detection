@@ -92,19 +92,19 @@ def extract_pathtoken(source, path_sequence):
 
 class CloneFeatures(object):
     def __init__(self,
-                 an_all_seq_ids,
-                 po_all_seq_ids,
-                 ne_all_seq_ids,
+                 an_path_embeds,
+                 po_path_embeds,
+                 ne_path_embeds,
                  ):
-        self.an_all_seq_ids = an_all_seq_ids
-        self.po_all_seq_ids = po_all_seq_ids
-        self.ne_all_seq_ids = ne_all_seq_ids
+        self.an_path_embeds = an_path_embeds
+        self.po_path_embeds = po_path_embeds
+        self.ne_path_embeds = ne_path_embeds
 
 
 def convert_examples_to_features_clone(js, tokenizer, path_dict, args):
     codes_paths = []  # 3*3*……
     for i in [1, 2, 3]:
-        clean_code, code_dict = remove_comments_and_docstrings(js[f'code{i}'], 'java')
+        # clean_code, code_dict = remove_comments_and_docstrings(js[f'code{i}'], 'java')
 
         # source
         # pre_code = ' '.join(clean_code.split())
@@ -120,20 +120,10 @@ def convert_examples_to_features_clone(js, tokenizer, path_dict, args):
         # s_ast = g.parse_ast_file(code_ast.root_node)
         # num_path, cfg_allpath, _, _ = g.get_allpath()
         # path_tokens1 = extract_pathtoken(code_dict, cfg_allpath)
-        path_tokens1, cfg_allpath = path_dict[js[f'idx{i}']]
-
-        all_seq_ids = []
-        for seq in path_tokens1:
-            seq_tokens = tokenizer.tokenize(seq)[:args.block_size - 2]
-            seq_tokens = [tokenizer.cls_token] + seq_tokens + [tokenizer.sep_token]
-            seq_ids = tokenizer.convert_tokens_to_ids(seq_tokens)
-            padding_length = args.block_size - len(seq_ids)
-            seq_ids += [tokenizer.pad_token_id] * padding_length
-            all_seq_ids.append(seq_ids)
-
-
-        all_seq_ids = all_seq_ids[:args.filter_size]
-        codes_paths.append(all_seq_ids)
+        path_embeds, cfg_allpath = path_dict[js[f'idx{i}']]
+        path_embeds = torch.tensor(path_embeds, dtype=torch.float32)
+        
+        codes_paths.append(path_embeds)
     return CloneFeatures(codes_paths[0], codes_paths[1], codes_paths[2])
 
 
@@ -160,9 +150,9 @@ class ExcelDataset(Dataset):
         return len(self.examples)
 
     def __getitem__(self, i):
-        return (torch.tensor(self.examples[i].an_all_seq_ids),
-                torch.tensor(self.examples[i].po_all_seq_ids),
-                torch.tensor(self.examples[i].ne_all_seq_ids))
+        return (self.examples[i].an_path_embeds,
+                self.examples[i].po_path_embeds,
+                self.examples[i].ne_path_embeds)
 
 def set_seed(seed=42):
     random.seed(seed)

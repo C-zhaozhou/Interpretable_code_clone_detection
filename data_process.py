@@ -80,6 +80,24 @@ def set_seed(seed=42):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
 
+def extract_pathtoken(source, path_sequence):
+    seqtoken_out = []
+    for path in path_sequence:
+        seq_code = ''
+        for line in path:
+            if (line in source):
+                seq_code += source[line]
+        seqtoken_out.append(seq_code)
+        if len(seqtoken_out) > 10:
+            break
+    if len(path_sequence) == 0:
+        seq_code = ''
+        for i in source:
+            seq_code += source[i]
+        seqtoken_out.append(seq_code)
+    seqtoken_out = sorted(seqtoken_out, key=lambda i: len(i), reverse=False)
+    return seqtoken_out
+
 def main():
     parser = argparse.ArgumentParser()
 
@@ -256,33 +274,65 @@ def main():
     # input_text =
     # input_ids =
     # outputs
-
-    model = Model(model, config, tokenizer, args)
     if args.local_rank == 0:
         torch.distributed.barrier()  # End of barrier to make sure only the first process in distributed training download model & vocab
 
     logger.info("Training/evaluation parameters %s", args)
 
-    # Evaluation
-    results = {}
-    if args.do_eval and args.local_rank in [-1, 0]:
-        checkpoint_prefix = 'checkpoint-best-acc/model.bin'
-        output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
-        model.load_state_dict(torch.load(output_dir))
-        model.to(args.device)
-        result = evaluate(args, model, tokenizer, 8)
-        logger.info("***** Eval results *****")
-        for key in sorted(result.keys()):
-            logger.info("  %s = %s", key, str(round(result[key], 4)))
+    model.to(args.device)
 
-    if args.do_test and args.local_rank in [-1, 0]:
-        checkpoint_prefix = 'checkpoint-best-acc/model.bin'
-        output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
-        model.load_state_dict(torch.load(output_dir))
-        model.to(args.device)
-        test(args, model, tokenizer)
+    output = open('test/path_embeddings1.pkl', 'wb')
+    path_dict = {}
+    state_dict = {}
+    num_id = 0
+    sum_ratio = 0
+    num_path_dict = {}
+    code_path = '../test_dataset/id2sourcecode'
+    file_list = os.listdir(code_path)
 
-    return results
+    for file in file_list:
+        code = open(f"{code_path}/{file}", encoding='UTF-8').read()
+        code = code.strip()
+        num_id += 1
+        if num_id%100==0:
+            print(num_id, flush=True)
+        clean_code, code_dict = remove_comments_and_docstrings(code, 'java')
+        g = C_CFG()
+        code_ast = ps.tree_sitter_ast(clean_code, Lang.JAVA)
+        s_ast = g.parse_ast_file(code_ast.root_node)
+        num_path, cfg_allpath, _, ratio = g.get_allpath()
+        sum_ratio += ratio
+        path_tokens1 = extract_pathtoken(code_dict, cfg_allpath)
+
+        all_seq_ids = []
+        for seq in path_tokens1:
+            seq_tokens = tokenizer.tokenize(seq)[:args.block_size - 2]
+            seq_tokens = [tokenizer.cls_token] + seq_tokens + [tokenizer.sep_token]
+            seq_ids = tokenizer.convert_tokens_to_ids(seq_tokens)
+            padding_length = args.block_size - len(seq_ids)
+            seq_ids += [tokenizer.pad_token_id] * padding_length
+            all_seq_ids.append(seq_ids)
+        all_seq_ids = all_seq_ids[:args.filter_size]    # [3, 510]    [path_num, ids_len_of_path/token_len]
+
+        all_seq_ids = torch.tensor(all_seq_ids, dtype=torch.int64, device=args.device)
+        # 计算路径表示E                                                    # [batch, path_num, ids_len_of_path/token_len]
+        seq_embeds = model(all_seq_ids, attention_mask=all_seq_ids.ne(1))[0]  # [3, 510] -> [3, 510, 768]
+        seq_embeds = seq_embeds[:, 0, :]  # [3, 510, 768] -> [3, 768]
+        seq_embeds = seq_embeds.tolist()
+
+        path_dict[file[:-5]] = seq_embeds, cfg_allpath
+        #print("num_paths:", num_path)
+    print("test file finish...", flush=True)
+    print(sum_ratio/num_id, flush=True)
+    # Pickle dictionary using protocol 0.
+    pickle.dump(path_dict, output)
+    output.close()
+    # with open('test\messaget3.txt', 'w') as f:
+    #     f.write(str(path_dict))
+    #     f.write('\n')
+
+    # embeds, cfg_allpath = path_dict['525']
+    # embeds = torch.tensor(embeds,  dtype=torch.float32, device=args.device)
 
 
 if __name__ == "__main__":

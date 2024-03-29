@@ -128,29 +128,15 @@ class Model(nn.Module):
         self.linear = nn.Linear(3, 1)  # 3->5
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-        self.cnnclassifier = CNNClassificationSeq(config, self.args)
-
     # 计算代码表示
-    def enc(self, seq_embeds):
-        batch_size = seq_embeds.shape[0]
-        # token_len = seq_ids.shape[-1]
-        # # 计算路径表示E                                                    # [batch, path_num, ids_len_of_path/token_len]
-        # seq_inputs = seq_ids.reshape(-1, token_len)  # [4, 3, 400] -> [4*3, 400]
-        # seq_embeds = self.encoder(seq_inputs, attention_mask=seq_inputs.ne(1))[0]  # [4*3, 400] -> [4*3, 400, 768]
-        # seq_embeds = seq_embeds[:, 0, :]  # [4*3, 400, 768] -> [4*3, 768]
-        outputs_seq = seq_embeds.reshape(batch_size, -1)  # [4*3, 768] -> [4, 3*768]
-        outputs_seq = self.dropout(outputs_seq)
-
+    def forward(self, seq_inputs):
+        # 计算路径表示E                                                    # [batch, path_num, ids_len_of_path/token_len]
+        seq_embeds = self.encoder(seq_inputs, attention_mask=seq_inputs.ne(1))[0]
+        seq_embeds = seq_embeds[:, 0, :]  # [4*3, 400, 768] -> [4*3, 768]
+        seq_embeds = seq_embeds.tolist()
         # 计算代码表示Z
-        return self.cnnclassifier(outputs_seq)
+        return seq_embeds
 
-    def forward(self, anchor, positive, negative=None):
-        if negative is not None:
-            an_logits = self.enc(anchor)
-            po_logits = self.enc(positive)
-            ne_logits = self.enc(negative)
-
-            return an_logits, po_logits, ne_logits
 
 
 # def get_gpu_mem_info(gpu_id=0):
