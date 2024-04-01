@@ -71,6 +71,25 @@ class TextCNN(nn.Module):
         return self.fc(cat)
 
 
+class DistanceClassifier(nn.Module):
+    def __init__(self, config, input_size, hidden_size):
+        super(DistanceClassifier, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, 1)
+        self.sigmoid = nn.Sigmoid()
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, input1, input2):
+        # Concatenate two input embeddings
+        x = torch.cat((input1, input2), dim=1)
+        x = self.fc1(x)
+        x = torch.relu(x)
+        self.dropout(x)
+        x = self.fc2(x)
+        output = self.sigmoid(x)
+        return output
+
+
 class CNNClassificationSeq(nn.Module):
     """Head for sentence-level classification tasks."""
 
@@ -129,6 +148,7 @@ class Model(nn.Module):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
         self.cnnclassifier = CNNClassificationSeq(config, self.args)
+        self.distancecal = DistanceClassifier(config, 2 * config.hidden_size, 2 * self.args.d_size)  # [2*768,2*128]
 
     # 计算代码表示
     def enc(self, seq_embeds):
@@ -139,73 +159,17 @@ class Model(nn.Module):
         # seq_embeds = self.encoder(seq_inputs, attention_mask=seq_inputs.ne(1))[0]  # [4*3, 400] -> [4*3, 400, 768]
         # seq_embeds = seq_embeds[:, 0, :]  # [4*3, 400, 768] -> [4*3, 768]
         outputs_seq = seq_embeds.reshape(batch_size, -1)  # [4*3, 768] -> [4, 3*768]
-        outputs_seq = self.dropout(outputs_seq)
+        # outputs_seq = self.dropout(outputs_seq)
 
         # 计算代码表示Z
         return self.cnnclassifier(outputs_seq)
 
     def forward(self, anchor, positive, negative=None):
         if negative is not None:
-            an_logits = self.enc(anchor)
+            an_logits = self.enc(anchor)        # [B, 768]
             po_logits = self.enc(positive)
             ne_logits = self.enc(negative)
+            ap_dis = self.distancecal(an_logits, po_logits)
+            an_dis = self.distancecal(an_logits, ne_logits)
 
-            return an_logits, po_logits, ne_logits
-
-
-# def get_gpu_mem_info(gpu_id=0):
-#     """
-#     根据显卡 id 获取显存使用信息, 单位 MB
-#     :param gpu_id: 显卡 ID
-#     :return: total 所有的显存，used 当前使用的显存, free 可使用的显存
-#     """
-#     import pynvml
-#     pynvml.nvmlInit()
-#     if gpu_id < 0 or gpu_id >= pynvml.nvmlDeviceGetCount():
-#         print(r'gpu_id {} 对应的显卡不存在!'.format(gpu_id))
-#         return 0, 0, 0
-#
-#     handler = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
-#     meminfo = pynvml.nvmlDeviceGetMemoryInfo(handler)
-#     total = round(meminfo.total / 1024 / 1024, 2)
-#     used = round(meminfo.used / 1024 / 1024, 2)
-#     free = round(meminfo.free / 1024 / 1024, 2)
-#     return total, used, free
-
-
-
-# class Model(nn.Module):
-#     def __init__(self, encoder, config, tokenizer, args):
-#         super(Model, self).__init__()
-#         self.encoder = encoder
-#         self.config = config
-#         self.tokenizer = tokenizer
-#         self.args = args
-#         self.linear = nn.Linear(3, 1)        # 3->5
-#
-#         self.cnnclassifier = CNNClassificationSeq(config, self.args)
-#
-#     def forward(self, seq_ids=None, input_ids=None, labels=None):
-#         batch_size = seq_ids.shape[0]
-#         seq_len = seq_ids.shape[1]
-#         token_len = seq_ids.shape[-1]
-#
-#         # 计算路径表示E                                                     # [batch, path_num, ids_len_of_path/token_len]
-#         seq_inputs = seq_ids.reshape(-1, token_len)                                 # [4, 3, 400] -> [4*3, 400]
-#         seq_embeds = self.encoder(seq_inputs, attention_mask=seq_inputs.ne(1))[0]    # [4*3, 400] -> [4*3, 400, 768]
-#         seq_embeds = seq_embeds[:, 0, :]                                           # [4*3, 400, 768] -> [4*3, 768]
-#         outputs_seq = seq_embeds.reshape(batch_size, -1)                           # [4*3, 768] -> [4, 3*768]
-#
-#         # 计算代码表示Z
-#         logits_path = self.cnnclassifier(outputs_seq)
-#
-#         # 计算分类结果
-#         prob_path = torch.sigmoid(logits_path)
-#         prob = prob_path
-#         if labels is not None:
-#             labels = labels.float()
-#             loss = torch.log(prob[:, 0]+1e-10)*labels+torch.log((1-prob)[:, 0]+1e-10)*(1-labels)
-#             loss = -loss.mean()
-#             return loss, prob
-#         else:
-#             return prob
+            return ap_dis, an_dis

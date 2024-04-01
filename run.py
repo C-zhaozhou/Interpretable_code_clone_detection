@@ -238,14 +238,18 @@ def train(args, train_dataset, model, tokenizer):
             positive = batch[1].to(args.device)
             negative = batch[2].to(args.device)
             model.train()
-            an_logits, po_logits, ne_logits = model(anchor, positive, negative)  # [Batchsize,768]
+            ap_dis, an_dis = model(anchor, positive, negative)  # [Batchsize,768]
+
+            margin = 1
+            losses = F.relu(ap_dis - an_dis + margin)
+            loss = losses.mean()
 
             # 计算triplet loss
-            cos_pos = 0.5 - (nn.CosineSimilarity(dim=1)(an_logits, po_logits) * 0.5)  # [Batchsize]
-            cos_neg = 0.5 - (nn.CosineSimilarity(dim=1)(an_logits, ne_logits) * 0.5)
-            margin = 1
-            losses = F.relu(cos_pos - cos_neg + margin)   # [2]
-            loss = losses.mean()   # tensor(1.0089)
+            # cos_pos = 0.5 - (nn.CosineSimilarity(dim=1)(an_logits, po_logits) * 0.5)  # [Batchsize]
+            # cos_neg = 0.5 - (nn.CosineSimilarity(dim=1)(an_logits, ne_logits) * 0.5)
+            # margin = 1
+            # losses = F.relu(cos_pos - cos_neg + margin)   # [2]
+            # loss = losses.mean()   # tensor(1.0089)
 
             # logger.info("**********")
             # logger.info(f"{type(cos_pos)}")
@@ -267,8 +271,8 @@ def train(args, train_dataset, model, tokenizer):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
             loss = loss * args.gradient_accumulation_steps
-            # TODO 这里的loss需要求平均吗？
-            # TODO 可以求一下当前epochs的平均，方便看出整体变化趋势
+            # DONE 这里的loss需要求平均吗？ 不用
+            # DONE 可以求一下当前epochs的平均，方便看出整体变化趋势
             tr_num += 1
             train_loss += loss.item()
             # if avg_loss == 0:
@@ -357,11 +361,9 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
         positive = batch[1].to(args.device)
         negative = batch[2].to(args.device)
         with torch.no_grad():
-            an_logits, po_logits, ne_logits = model(anchor, positive, negative)
-        cos_r = 0.5 - (nn.CosineSimilarity(dim=1)(an_logits, po_logits) * 0.5)
-        cos_right += cos_r.tolist()
-        cos_w = 0.5 - (nn.CosineSimilarity(dim=1)(an_logits, ne_logits) * 0.5)
-        cos_wrong += cos_w.tolist()
+            ap_dis, an_dis = model(anchor, positive, negative)
+        cos_right += ap_dis.tolist()
+        cos_wrong += an_dis.tolist()
     temp_best_f1 = 0
     temp_best_recall = 0
     temp_best_precision = 0
@@ -375,11 +377,11 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
     error_count = 0
     threshold = 0.5
     for h in cos_right:
-        if h <= threshold:
+        if h[0] <= threshold:
             count += 1  # 实测克隆对个数TP
     total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
     for h in cos_wrong:
-        if h > threshold:
+        if h[0] > threshold:
             error_count += 1  # 实测非克隆对个数TN
     error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
     correct_recall = count / total
@@ -394,17 +396,17 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
 
     x = []
     y = []
-    for k in tqdm(range(1, 100)):
+    for k in range(1, 100):
 
         count = 0
         error_count = 0
         threshold = k / 100
         for h in cos_right:
-            if h <= threshold:
+            if h[0] <= threshold:
                 count += 1  # 实测克隆对个数TP
         total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
         for h in cos_wrong:
-            if h > threshold:
+            if h[0] > threshold:
                 error_count += 1  # 实测非克隆对个数TN
         error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
         correct_recall = count / total
@@ -485,11 +487,11 @@ def test(args, model, tokenizer):
         best_threshold = 0.32
     logger.info("using eval_threshold: %s", best_threshold)
     for i in cos_right:
-        if i <= best_threshold:
+        if i[0] <= best_threshold:
             count += 1
     total = len(cos_right)
     for i in cos_wrong:
-        if i > best_threshold:
+        if i[0] > best_threshold:
             error_count += 1
     error_total = len(cos_wrong)
     correct_recall = count / total
@@ -500,16 +502,16 @@ def test(args, model, tokenizer):
     for key in sorted(result.keys()):
         logger.info("  %s = %s", key, str(result[key]))
 
-    for k in tqdm(range(1, 100)):
+    for k in range(1, 100):
         count = 0
         error_count = 0
         threshold = k / 100
         for h in cos_right:
-            if h <= threshold:
+            if h[0] <= threshold:
                 count += 1  # 实测克隆对个数TP
         total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
         for h in cos_wrong:
-            if h > threshold:
+            if h[0] > threshold:
                 error_count += 1  # 实测非克隆对个数TN
         error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
         correct_recall = count / total
@@ -601,7 +603,7 @@ def main():
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--eval_batch_size", default=4, type=int,
                         help="Batch size per GPU/CPU for evaluation.")
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=6,
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
     parser.add_argument("--learning_rate", default=5e-5, type=float,
                         help="The initial learning rate for Adam.")
@@ -746,7 +748,7 @@ def main():
     if args.do_eval and args.local_rank in [-1, 0]:
             checkpoint_prefix = 'checkpoint-best-acc/model.bin'
             output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
-            model.load_state_dict(torch.load(output_dir))      
+            # model.load_state_dict(torch.load(output_dir))
             model.to(args.device)
             result = evaluate(args, model, tokenizer, 8)
             logger.info("***** Eval results *****")
