@@ -173,3 +173,8 @@ class Model(nn.Module):
             an_dis = self.distancecal(an_logits, ne_logits)
 
             return ap_dis, an_dis
+        else:
+            an_logits = self.enc(anchor)
+            co_logits = self.enc(positive)
+            ac_dis = self.distancecal(an_logits, co_logits)
+            return ac_dis

@@ -42,7 +42,7 @@ import json
 from sklearn.metrics import recall_score,precision_score,f1_score
 from tqdm import tqdm, trange
 import multiprocessing
-from model import Model
+from model_embeddings import Model
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
                           BertConfig, BertForMaskedLM, BertTokenizer,
@@ -94,12 +94,13 @@ class CloneFeatures(object):
     def __init__(self,
                  an_path_embeds,
                  po_path_embeds,
-                 ne_path_embeds,
+                 ne_path_embeds=None,
+                 label=None,
                  ):
         self.an_path_embeds = an_path_embeds
         self.po_path_embeds = po_path_embeds
         self.ne_path_embeds = ne_path_embeds
-
+        self.label = label
 
 def convert_examples_to_features_clone(js, tokenizer, path_dict, args):
     codes_paths = []  # 3*3*……
@@ -124,12 +125,37 @@ def convert_examples_to_features_clone(js, tokenizer, path_dict, args):
         path_embeds = torch.tensor(path_embeds, dtype=torch.float32)
         
         codes_paths.append(path_embeds)
-    return CloneFeatures(codes_paths[0], codes_paths[1], codes_paths[2])
+    return CloneFeatures(codes_paths[0], codes_paths[1], ne_path_embeds=codes_paths[2])
 
+
+def convert_examples_to_features_clone_eval(js, tokenizer, path_dict, args):
+    codes_paths = []  # 3*3*……
+    for i in [1, 2]:
+        # clean_code, code_dict = remove_comments_and_docstrings(js[f'code{i}'], 'java')
+
+        # source
+        # pre_code = ' '.join(clean_code.split())
+        # code_tokens = tokenizer.tokenize(pre_code)[:args.block_size - 2]
+        # source_tokens = [tokenizer.cls_token] + code_tokens + [tokenizer.sep_token]
+        # source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
+        # padding_length = args.block_size - len(source_ids)
+        # source_ids += [tokenizer.pad_token_id] * padding_length
+
+        # paths
+        # g = C_CFG()
+        # code_ast = ps.tree_sitter_ast(clean_code, Lang.JAVA)
+        # s_ast = g.parse_ast_file(code_ast.root_node)
+        # num_path, cfg_allpath, _, _ = g.get_allpath()
+        # path_tokens1 = extract_pathtoken(code_dict, cfg_allpath)
+        path_embeds, cfg_allpath = path_dict[js[f'idx{i}']]
+        path_embeds = torch.tensor(path_embeds, dtype=torch.float32)
+
+        codes_paths.append(path_embeds)
+    return CloneFeatures(codes_paths[0], codes_paths[1], label=js['label'])
 
 # 输入为未预处理excel生成的jsonl。
 # class JsonDataset(Dataset):
-class ExcelDataset(Dataset):
+class TrainDataset(Dataset):
     def __init__(self, tokenizer, args, file_path=None):
         self.examples = []
         # pkl_file = open(args.pkl_file, 'rb')
@@ -153,6 +179,31 @@ class ExcelDataset(Dataset):
         return (self.examples[i].an_path_embeds,
                 self.examples[i].po_path_embeds,
                 self.examples[i].ne_path_embeds)
+
+class EvalDataset(Dataset):
+    def __init__(self, tokenizer, args, file_path=None):
+        self.examples = []
+        # pkl_file = open(args.pkl_file, 'rb')
+        # path_dict = pickle.load(pkl_file)
+        pkl_file = open(args.pkl_file, 'rb')
+        path_dict = pickle.load(pkl_file)
+
+        with open(file_path, encoding="UTF-8") as f1:
+            for idx, line in enumerate(f1):
+                js = json.loads(line.strip())
+                # idx_list = line.strip().split(',')
+                # for idx in idx_list:
+                #     code = open(f"../test_dataset/id2sourcecode/{idx}.java", encoding='UTF-8').read()
+                #     group.append(code)
+                self.examples.append(convert_examples_to_features_clone_eval(js, tokenizer, path_dict, args))
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, i):
+        return (self.examples[i].an_path_embeds,
+                self.examples[i].po_path_embeds,
+                self.examples[i].label)
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -334,7 +385,7 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_output_dir = args.output_dir
 
-    eval_dataset = ExcelDataset(tokenizer, args, args.eval_data_file)
+    eval_dataset = EvalDataset(tokenizer, args, args.eval_data_file)
 
     if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(eval_output_dir)
@@ -354,38 +405,57 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
     eval_loss = 0.0
     nb_eval_steps = 0
     model.eval()
-    cos_right = []
-    cos_wrong = []
+    total = []
+    # cos_right = []
+    # cos_wrong = []
     for batch in eval_dataloader:
         anchor = batch[0].to(args.device)
         positive = batch[1].to(args.device)
-        negative = batch[2].to(args.device)
+        label = batch[2].to(args.device)
         with torch.no_grad():
-            ap_dis, an_dis = model(anchor, positive, negative)
-        cos_right += ap_dis.tolist()
-        cos_wrong += an_dis.tolist()
+            ac_dis = model(anchor, positive)
+        label = label.unsqueeze(1)
+        label_pre = torch.cat((label,ac_dis), dim=1)
+        total += label_pre.tolist()
+        # cos_right += ap_dis.tolist()
+        # cos_wrong += an_dis.tolist()
     temp_best_f1 = 0
     temp_best_recall = 0
     temp_best_precision = 0
-    temp_count = 0
-    temp_error_count = 0
-    temp_error_total = 0
-    temp_total = 0
+    temp_tp = 0
+    temp_tn = 0
+    temp_fp = 0
+    temp_fn = 0
     temp_best_threshold = 0
 
-    count = 0
-    error_count = 0
+    # count = 0
+    # error_count = 0
+    tp, fp, tn, fn = 0, 0, 0, 0
     threshold = 0.5
-    for h in cos_right:
-        if h[0] <= threshold:
-            count += 1  # 实测克隆对个数TP
-    total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
-    for h in cos_wrong:
-        if h[0] > threshold:
-            error_count += 1  # 实测非克隆对个数TN
-    error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
-    correct_recall = count / total
-    precision = count / (error_total - error_count + count)  # error_total-error_count：潜在非克隆对中的克隆对数目
+    for h in total:
+        if h[0] == 1:
+            if h[1] <= threshold:
+                tp += 1
+            else:
+                fn += 1
+        if h[0] == 0:
+            if h[1] <= threshold:
+                fp += 1
+            else:
+                tn += 1
+    precision = tp / (tp + fp)
+    correct_recall = tp / (tp + fn)
+
+    # for h in cos_right:
+    #     if h[0] <= threshold:
+    #         count += 1  # 实测克隆对个数TP
+    # total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
+    # for h in cos_wrong:
+    #     if h[0] > threshold:
+    #         error_count += 1  # 实测非克隆对个数TN
+    # error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
+    # correct_recall = count / total
+    # precision = count / (error_total - error_count + count)  # error_total-error_count：潜在非克隆对中的克隆对数目
     F1 = 2 * precision * correct_recall / (precision + correct_recall)
     results = {'recall': correct_recall,
               'precision': precision,
@@ -397,22 +467,26 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
     x = []
     y = []
     for k in range(1, 100):
-
-        count = 0
-        error_count = 0
         threshold = k / 100
-        for h in cos_right:
-            if h[0] <= threshold:
-                count += 1  # 实测克隆对个数TP
-        total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
-        for h in cos_wrong:
-            if h[0] > threshold:
-                error_count += 1  # 实测非克隆对个数TN
-        error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
-        correct_recall = count / total
-        if error_total - error_count + count == 0:
+        tp, fp, tn, fn = 0, 0, 0, 0
+        for h in total:
+            if h[0] == 1:
+                if h[1] <= threshold:
+                    tp += 1
+                else:
+                    fn += 1
+            if h[0] == 0:
+                if h[1] <= threshold:
+                    fp += 1
+                else:
+                    tn += 1
+        if tp + fp == 0:
             continue
-        precision = count / (error_total - error_count + count)  # error_total-error_count：潜在非克隆对中的克隆对数目
+        precision = tp / (tp + fp)
+        if tp + fn == 0:
+            continue
+        correct_recall = tp / (tp + fn)
+
         if precision + correct_recall == 0:
             continue
         F1 = 2 * precision * correct_recall / (precision + correct_recall)
@@ -423,17 +497,17 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
             temp_best_f1 = F1
             temp_best_recall = correct_recall
             temp_best_precision = precision
-            temp_count = count
-            temp_error_count = error_count
-            temp_error_total = error_total
-            temp_total = total
             temp_best_threshold = threshold
+            temp_tp = tp
+            temp_tn = tn
+            temp_fp = fp
+            temp_fn = fn
     plt.plot(x, y, marker='o', linestyle='-', markersize=2)
     max_y = max(y)
     max_x = x[y.index(max_y)]
     plt.text(max_x, max_y, f'({max_x}, {max_y})', ha='right')
     plt.savefig(f'line_plot{idx}.png')
-    print("eval_loss", temp_count, temp_error_count, temp_total, temp_error_total)
+    print("eval_loss", temp_tp, temp_tn, temp_fp, temp_fn)
     result = {'recall': temp_best_recall,
               'precision': temp_best_precision,
               'F1': temp_best_f1,
@@ -443,7 +517,7 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
 
 def test(args, model, tokenizer):
     # Loop to handle MNLI double evaluation (matched, mis-matched)
-    eval_dataset = ExcelDataset(tokenizer, args, args.test_data_file)
+    eval_dataset = EvalDataset(tokenizer, args, args.test_data_file)
 
     # Note that DistributedSampler samples randomly
     eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
@@ -737,7 +811,7 @@ def main():
         if args.local_rank not in [-1, 0]:
             torch.distributed.barrier()  # Barrier to make sure only the first process in distributed training process the dataset, and the others will use the cache
 
-        train_dataset = ExcelDataset(tokenizer, args, args.train_data_file)
+        train_dataset = TrainDataset(tokenizer, args, args.train_data_file)
         if args.local_rank == 0:
             torch.distributed.barrier()
 

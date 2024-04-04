@@ -1,24 +1,3 @@
-# coding=utf-8
-# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
-# Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""
-Fine-tuning the library models for language modeling on a text file (GPT, GPT-2, BERT, RoBERTa).
-GPT and GPT-2 are fine-tuned using a causal language modeling (CLM) loss while BERT and RoBERTa are fine-tuned
-using a masked language modeling (MLM) loss.
-"""
-
 from __future__ import absolute_import, division, print_function
 
 import argparse
@@ -44,7 +23,7 @@ import json
 from sklearn.metrics import recall_score, precision_score, f1_score
 from tqdm import tqdm, trange
 import multiprocessing
-from model_embeddings import Model
+from model import Model
 
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
@@ -67,7 +46,6 @@ MODEL_CLASSES = {
 sys.path.append('..')
 
 import parserTool.parse as ps
-from c_cfg import C_CFG
 from parserTool.utils import remove_comments_and_docstrings
 from parserTool.parse import Lang
 import pickle
@@ -80,24 +58,33 @@ def set_seed(seed=42):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
 
-def extract_pathtoken(source, path_sequence):
-    seqtoken_out = []
-    for path in path_sequence:
-        seq_code = ''
-        for line in path:
-            if (line in source):
-                seq_code += source[line]
-        seqtoken_out.append(seq_code)
-        if len(seqtoken_out) > 10:
-            break
-    if len(path_sequence) == 0:
-        seq_code = ''
-        for i in source:
-            seq_code += source[i]
-        seqtoken_out.append(seq_code)
-    seqtoken_out = sorted(seqtoken_out, key=lambda i: len(i), reverse=False)
-    return seqtoken_out
+class BahdanauAttention(nn.Module):
+    def __init__(self, hidden_size):
+        super(BahdanauAttention, self).__init__()
+        self.W1 = nn.Linear(hidden_size, hidden_size)
+        self.W2 = nn.Linear(hidden_size, hidden_size)
+        self.V = nn.Linear(hidden_size, 1)
 
+    def forward(self, encoder_outputs, decoder_hidden):
+        energy = torch.tanh(self.W1(encoder_outputs) + self.W2(decoder_hidden))
+        attention_scores = self.V(energy).squeeze(2)
+        attention_weights = torch.softmax(attention_scores, dim=0)
+        context_vector = torch.sum(encoder_outputs * attention_weights.unsqueeze(2), dim=0)
+        return context_vector, attention_weights
+
+class BERTBahdanauAttention(nn.Module):
+    def __init__(self, bert_model, hidden_size):
+        super(BERTBahdanauAttention, self).__init__()
+        self.bert = bert_model
+        self.attention = BahdanauAttention(hidden_size)
+
+    def forward(self, input_ids, attention_mask, decoder_hidden):
+        bert_outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        encoder_outputs = bert_outputs.last_hidden_state.to("cuda:0")
+        context_vector, attention_weights = self.attention(encoder_outputs, decoder_hidden)
+        return context_vector, attention_weights
+
+# 测试BERTBahdanauAttention模块
 def main():
     parser = argparse.ArgumentParser()
 
@@ -281,64 +268,18 @@ def main():
 
     model.to(args.device)
 
-    output = open('test/path_embeddings1.pkl', 'wb')
-    path_dict = {}
-    state_dict = {}
-    num_id = 0
-    sum_ratio = 0
-    num_path_dict = {}
-    code_path = '../test_dataset/id2sourcecode'
-    file_list = os.listdir(code_path)
+    hidden_size = 768  # BERT-base的隐藏层大小
 
-    for file in file_list:
-        code = open(f"{code_path}/{file}", encoding='UTF-8').read()
-        code = code.strip()
-        num_id += 1
-        if num_id%100==0:
-            print(num_id, flush=True)
-        clean_code, code_dict = remove_comments_and_docstrings(code, 'java')
-        g = C_CFG()
-        code_ast = ps.tree_sitter_ast(clean_code, Lang.JAVA)
-        s_ast = g.parse_ast_file(code_ast.root_node)
-        num_path, cfg_allpath, _, ratio = g.get_allpath()
-        sum_ratio += ratio
-        path_tokens1 = extract_pathtoken(code_dict, cfg_allpath)
+    input_ids = torch.tensor([[1, 2, 3, 0, 0]]).to(args.device)  # 示例输入序列的token IDs
+    attention_mask = torch.tensor([[1, 1, 1, 0, 0]]).to(args.device)  # 示例输入序列的attention mask
+    decoder_hidden = torch.randn(1, 1, hidden_size).to(args.device)  # 示例解码器的隐藏状态
 
-        all_seq_ids = []
-        for seq in path_tokens1:
-            seq_tokens = tokenizer.tokenize(seq)[:args.block_size - 2]
-            seq_tokens = [tokenizer.cls_token] + seq_tokens + [tokenizer.sep_token]
-            seq_ids = tokenizer.convert_tokens_to_ids(seq_tokens)
-            padding_length = args.block_size - len(seq_ids)
-            seq_ids += [tokenizer.pad_token_id] * padding_length
-            all_seq_ids.append(seq_ids)
-        all_seq_ids = all_seq_ids[:args.filter_size]    # [3, 510]    [path_num, ids_len_of_path/token_len]
+    bert_attention = BERTBahdanauAttention(model, hidden_size).to("cuda:0")
+    context_vector, attention_weights = bert_attention(input_ids, attention_mask, decoder_hidden)
 
-        all_seq_ids = torch.tensor(all_seq_ids, dtype=torch.int64, device=args.device)
-        # 计算路径表示E                                                    # [batch, path_num, ids_len_of_path/token_len]
-        seq_embeds = model(all_seq_ids, attention_mask=all_seq_ids.ne(1))[0]  # [3, 510] -> [3, 510, 768]
-        seq_embeds = seq_embeds[:, 0, :]  # [3, 510, 768] -> [3, 768]
-        seq_embeds = seq_embeds.tolist()
-
-        path_dict[file[:-5]] = seq_embeds, cfg_allpath
-        #print("num_paths:", num_path)
-    print("test file finish...", flush=True)
-    print(sum_ratio/num_id, flush=True)
-    # Pickle dictionary using protocol 0.
-    pickle.dump(path_dict, output)
-    output.close()
-    # with open('test\messaget3.txt', 'w') as f:
-    #     f.write(str(path_dict))
-    #     f.write('\n')
-
-    # embeds, cfg_allpath = path_dict['525']
-    # embeds = torch.tensor(embeds,  dtype=torch.float32, device=args.device)
+    print("Context vector shape:", context_vector.shape)
+    print("Attention weights shape:", attention_weights.shape)
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
