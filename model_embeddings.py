@@ -115,7 +115,7 @@ class CNNClassificationSeq(nn.Module):
         # self.filter_size.append(3)
 
         self.cnn = TextCNN(config.hidden_size, self.window_size, self.filter_size, self.d_size, 0.2)
-
+        # (768,128,3,128)
         # self.linear_mlp = nn.Linear(6 * config.hidden_size, self.d_size)
         # self.linear_multi = nn.Linear(config.hidden_size, config.hidden_size)
 

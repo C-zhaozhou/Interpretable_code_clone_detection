@@ -3,7 +3,7 @@ import sys
 # sys.path.append('/home/EPVD/')
 sys.path.append('..')
 import parserTool.parse as ps
-from c_cfg import C_CFG
+from c_cfg_3 import C_CFG
 from parserTool.utils import remove_comments_and_docstrings
 from parserTool.parse import Lang
 import json

@@ -67,7 +67,7 @@ MODEL_CLASSES = {
 sys.path.append('..')
 
 import parserTool.parse as ps
-from c_cfg import C_CFG
+from c_cfg_10 import C_CFG
 from parserTool.utils import remove_comments_and_docstrings
 from parserTool.parse import Lang
 import pickle
@@ -85,7 +85,7 @@ def extract_pathtoken(source, path_sequence):
     for path in path_sequence:
         seq_code = ''
         for line in path:
-            if (line in source):
+            if line in source:
                 seq_code += source[line]
         seqtoken_out.append(seq_code)
         if len(seqtoken_out) > 10:
@@ -95,7 +95,7 @@ def extract_pathtoken(source, path_sequence):
         for i in source:
             seq_code += source[i]
         seqtoken_out.append(seq_code)
-    seqtoken_out = sorted(seqtoken_out, key=lambda i: len(i), reverse=False)
+    # seqtoken_out = sorted(seqtoken_out, key=lambda i: len(i), reverse=False)
     return seqtoken_out
 
 def main():
@@ -281,7 +281,7 @@ def main():
 
     model.to(args.device)
 
-    output = open('test/path_embeddings1.pkl', 'wb')
+    output = open('test/path_embeddings_10.pkl', 'wb')
     path_dict = {}
     state_dict = {}
     num_id = 0
@@ -312,7 +312,8 @@ def main():
             padding_length = args.block_size - len(seq_ids)
             seq_ids += [tokenizer.pad_token_id] * padding_length
             all_seq_ids.append(seq_ids)
-        all_seq_ids = all_seq_ids[:args.filter_size]    # [3, 510]    [path_num, ids_len_of_path/token_len]
+        # all_seq_ids = all_seq_ids[:args.filter_size]    # [3, 510]    [path_num, ids_len_of_path/token_len]
+        all_seq_ids = all_seq_ids[:10]
 
         all_seq_ids = torch.tensor(all_seq_ids, dtype=torch.int64, device=args.device)
         # 计算路径表示E                                                    # [batch, path_num, ids_len_of_path/token_len]

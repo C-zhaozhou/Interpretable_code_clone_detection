@@ -1,6 +1,6 @@
 import jsonlines
 
-with open("../test_dataset/BCBcsv_onlyid/experiment_data/eval1.csv") as f1:
+with open("../test_dataset/BCBcsv_onlyid/experiment_data/eval1_mini.csv") as f1:
     for line in f1:
         dict_c = {}
         idx_list = line.strip().split(',')
@@ -11,7 +11,7 @@ with open("../test_dataset/BCBcsv_onlyid/experiment_data/eval1.csv") as f1:
             dict_c[f'code{i}'] = code
             i += 1
         dict_c['label'] = int(idx_list[-1])
-        with jsonlines.open('test/experiment_json/eval1.jsonl', mode='a') as writer:
+        with jsonlines.open('test/experiment_json/eval1_mini.jsonl', mode='a') as writer:
             writer.write(dict_c)
 
 

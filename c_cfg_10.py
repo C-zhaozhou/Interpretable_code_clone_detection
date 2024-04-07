@@ -50,11 +50,15 @@ class C_CFG():
         
         if 0 in node_uncover:
             node_uncover.remove(0)
+
         coverage = -1
         path2 = []
         for fno in self.finlineno:
             if nx.has_path(self.G, self.firstlineno, fno):
                 paths = self.k_shortest_paths(self.G, self.firstlineno, fno, 50)
+                for path_p in all_paths:
+                    if path_p in paths:
+                        paths.remove(path_p)
                 for path in paths:
                     if len(set(path) & node_uncover) > coverage:
                         path2 = path
@@ -67,29 +71,196 @@ class C_CFG():
             if len(self.G.adj[n1]) > 1:
                 self.G[n1][n2]['weight'] = 100
 
-        if path2 != path1:
-            all_paths.append(path2)
-        else:
-            all_paths.append([])
         node_uncover = node_uncover-set(path2)
-        
+        all_paths.append(path2)
+
+
         coverage = -1
         path3 = []
         for fno in self.finlineno:
             if nx.has_path(self.G, self.firstlineno, fno):
                 paths = self.k_shortest_paths(self.G, self.firstlineno, fno, 50)
+                for path_p in all_paths:
+                    if path_p in paths:
+                        paths.remove(path_p)
                 for path in paths:
                     if len(set(path) & node_uncover) > coverage:
                         path3 = path
                         coverage = len(set(path3) & node_uncover)
                     elif len(set(path) & node_uncover) == coverage and len(set(path)) > len(set(path3)):
                         path3 = path
+        for i in range(0, len(path3)-1):
+            n1 = path3[i]
+            n2 = path3[i+1]
+            if len(self.G.adj[n1]) > 1:
+                self.G[n1][n2]['weight'] = 100
+
+        node_uncover = node_uncover-set(path3)
+        all_paths.append(path3)
+
+
+        coverage = -1
+        path4 = []
+        for fno in self.finlineno:
+            if nx.has_path(self.G, self.firstlineno, fno):
+                paths = self.k_shortest_paths(self.G, self.firstlineno, fno, 50)
+                for path_p in all_paths:
+                    if path_p in paths:
+                        paths.remove(path_p)
+                for path in paths:
+                    if len(set(path) & node_uncover) > coverage:
+                        path4 = path
+                        coverage = len(set(path4) & node_uncover)
+                    elif len(set(path) & node_uncover) == coverage and len(set(path)) > len(set(path4)):
+                        path4 = path
+        for i in range(0, len(path4)-1):
+            n1 = path4[i]
+            n2 = path4[i+1]
+            if len(self.G.adj[n1]) > 1:
+                self.G[n1][n2]['weight'] = 100
+
+        node_uncover = node_uncover-set(path4)
+        all_paths.append(path4)
+
+
+        coverage = -1
+        path5 = []
+        for fno in self.finlineno:
+            if nx.has_path(self.G, self.firstlineno, fno):
+                paths = self.k_shortest_paths(self.G, self.firstlineno, fno, 50)
+                for path_p in all_paths:
+                    if path_p in paths:
+                        paths.remove(path_p)
+                for path in paths:
+                    if len(set(path) & node_uncover) > coverage:
+                        path5 = path
+                        coverage = len(set(path5) & node_uncover)
+                    elif len(set(path) & node_uncover) == coverage and len(set(path)) > len(set(path5)):
+                        path5 = path
+        for i in range(0, len(path5)-1):
+            n1 = path5[i]
+            n2 = path5[i+1]
+            if len(self.G.adj[n1]) > 1:
+                self.G[n1][n2]['weight'] = 100
+
+        node_uncover = node_uncover-set(path5)
+        all_paths.append(path5)
+
+
+        coverage = -1
+        path6 = []
+        for fno in self.finlineno:
+            if nx.has_path(self.G, self.firstlineno, fno):
+                paths = self.k_shortest_paths(self.G, self.firstlineno, fno, 50)
+                for path_p in all_paths:
+                    if path_p in paths:
+                        paths.remove(path_p)
+                for path in paths:
+                    if len(set(path) & node_uncover) > coverage:
+                        path6 = path
+                        coverage = len(set(path6) & node_uncover)
+                    elif len(set(path) & node_uncover) == coverage and len(set(path)) > len(set(path6)):
+                        path6 = path
+        for i in range(0, len(path6)-1):
+            n1 = path6[i]
+            n2 = path6[i+1]
+            if len(self.G.adj[n1]) > 1:
+                self.G[n1][n2]['weight'] = 100
+
+        node_uncover = node_uncover-set(path6)
+        all_paths.append(path6)
+
+
+        coverage = -1
+        path7 = []
+        for fno in self.finlineno:
+            if nx.has_path(self.G, self.firstlineno, fno):
+                paths = self.k_shortest_paths(self.G, self.firstlineno, fno, 50)
+                for path_p in all_paths:
+                    if path_p in paths:
+                        paths.remove(path_p)
+                for path in paths:
+                    if len(set(path) & node_uncover) > coverage:
+                        path7 = path
+                        coverage = len(set(path7) & node_uncover)
+                    elif len(set(path) & node_uncover) == coverage and len(set(path)) > len(set(path7)):
+                        path7 = path
+        for i in range(0, len(path7)-1):
+            n1 = path7[i]
+            n2 = path7[i+1]
+            if len(self.G.adj[n1]) > 1:
+                self.G[n1][n2]['weight'] = 100
+
+        node_uncover = node_uncover-set(path7)
+        all_paths.append(path7)
+
+
+        coverage = -1
+        path8 = []
+        for fno in self.finlineno:
+            if nx.has_path(self.G, self.firstlineno, fno):
+                paths = self.k_shortest_paths(self.G, self.firstlineno, fno, 50)
+                for path_p in all_paths:
+                    if path_p in paths:
+                        paths.remove(path_p)
+                for path in paths:
+                    if len(set(path) & node_uncover) > coverage:
+                        path8 = path
+                        coverage = len(set(path8) & node_uncover)
+                    elif len(set(path) & node_uncover) == coverage and len(set(path)) > len(set(path8)):
+                        path8 = path
+        for i in range(0, len(path8)-1):
+            n1 = path8[i]
+            n2 = path8[i+1]
+            if len(self.G.adj[n1]) > 1:
+                self.G[n1][n2]['weight'] = 100
+
+        node_uncover = node_uncover-set(path8)
+        all_paths.append(path8)
+
+
+        coverage = -1
+        path9 = []
+        for fno in self.finlineno:
+            if nx.has_path(self.G, self.firstlineno, fno):
+                paths = self.k_shortest_paths(self.G, self.firstlineno, fno, 50)
+                for path_p in all_paths:
+                    if path_p in paths:
+                        paths.remove(path_p)
+                for path in paths:
+                    if len(set(path) & node_uncover) > coverage:
+                        path9 = path
+                        coverage = len(set(path9) & node_uncover)
+                    elif len(set(path) & node_uncover) == coverage and len(set(path)) > len(set(path9)):
+                        path9 = path
+        for i in range(0, len(path9)-1):
+            n1 = path9[i]
+            n2 = path9[i+1]
+            if len(self.G.adj[n1]) > 1:
+                self.G[n1][n2]['weight'] = 100
+
+        node_uncover = node_uncover-set(path9)
+        all_paths.append(path9)
+
+
         
-        node_uncover = node_uncover - set(path3)
-        if path3 != path1 and path3 != path2:
-            all_paths.append(path3)
-        else:
-            all_paths.append([])
+        coverage = -1
+        path10 = []
+        for fno in self.finlineno:
+            if nx.has_path(self.G, self.firstlineno, fno):
+                paths = self.k_shortest_paths(self.G, self.firstlineno, fno, 50)
+                for path_p in all_paths:
+                    if path_p in paths:
+                        paths.remove(path_p)
+                for path in paths:
+                    if len(set(path) & node_uncover) > coverage:
+                        path10 = path
+                        coverage = len(set(path10) & node_uncover)
+                    elif len(set(path) & node_uncover) == coverage and len(set(path)) > len(set(path10)):
+                        path10 = path
+        
+        node_uncover = node_uncover - set(path10)
+        all_paths.append(path10)
         # # --------------------------------------------------------------
 
         num_path = 0

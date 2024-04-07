@@ -64,7 +64,7 @@ MODEL_CLASSES = {
 sys.path.append('..')
 
 import parserTool.parse as ps
-from c_cfg import C_CFG
+from c_cfg_3 import C_CFG
 from parserTool.utils import remove_comments_and_docstrings
 from parserTool.parse import Lang
 import pickle
@@ -86,7 +86,7 @@ def extract_pathtoken(source, path_sequence):
         for i in source:
             seq_code += source[i]
         seqtoken_out.append(seq_code)
-    seqtoken_out = sorted(seqtoken_out, key=lambda i: len(i), reverse=False)
+    # seqtoken_out = sorted(seqtoken_out, key=lambda i: len(i), reverse=False)
     return seqtoken_out
 
 
@@ -123,6 +123,7 @@ def convert_examples_to_features_clone(js, tokenizer, path_dict, args):
         # path_tokens1 = extract_pathtoken(code_dict, cfg_allpath)
         path_embeds, cfg_allpath = path_dict[js[f'idx{i}']]
         path_embeds = torch.tensor(path_embeds, dtype=torch.float32)
+        path_embeds = path_embeds[:args.filter_size]
         
         codes_paths.append(path_embeds)
     return CloneFeatures(codes_paths[0], codes_paths[1], ne_path_embeds=codes_paths[2])
@@ -149,6 +150,7 @@ def convert_examples_to_features_clone_eval(js, tokenizer, path_dict, args):
         # path_tokens1 = extract_pathtoken(code_dict, cfg_allpath)
         path_embeds, cfg_allpath = path_dict[js[f'idx{i}']]
         path_embeds = torch.tensor(path_embeds, dtype=torch.float32)
+        path_embeds = path_embeds[:args.filter_size]
 
         codes_paths.append(path_embeds)
     return CloneFeatures(codes_paths[0], codes_paths[1], label=js['label'])
