@@ -292,7 +292,8 @@ def train(args, train_dataset, model, tokenizer):
             ap_dis, an_dis = model(anchor, positive, negative)  # [Batchsize,768]
 
             margin = 1
-            losses = F.relu(ap_dis - an_dis + margin)
+            # losses = F.relu(ap_dis - an_dis + margin)
+            losses = F.relu(ap_dis - an_dis + margin) + F.relu(ap_dis - 0.5) + F.relu(0.5 - an_dis)
             loss = losses.mean()
 
             # 计算triplet loss

@@ -84,7 +84,7 @@ class DistanceClassifier(nn.Module):
         x = torch.cat((input1, input2), dim=1)
         x = self.fc1(x)
         x = torch.relu(x)
-        self.dropout(x)
+        x = self.dropout(x)
         x = self.fc2(x)
         output = self.sigmoid(x)
         return output
