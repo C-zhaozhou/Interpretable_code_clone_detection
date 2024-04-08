@@ -42,7 +42,7 @@ import json
 from sklearn.metrics import recall_score,precision_score,f1_score
 from tqdm import tqdm, trange
 import multiprocessing
-from model_embeddings import Model
+from model_multihead_attention import Model
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
                           BertConfig, BertForMaskedLM, BertTokenizer,
@@ -124,7 +124,7 @@ def convert_examples_to_features_clone(js, tokenizer, path_dict, args):
         path_embeds, cfg_allpath = path_dict[js[f'idx{i}']]
         path_embeds = torch.tensor(path_embeds, dtype=torch.float32)
         path_embeds = path_embeds[:args.filter_size]
-        
+
         codes_paths.append(path_embeds)
     return CloneFeatures(codes_paths[0], codes_paths[1], ne_path_embeds=codes_paths[2])
 
@@ -216,10 +216,10 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
 
 def train(args, train_dataset, model, tokenizer):
-    """ Train the model """ 
+    """ Train the model """
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-    
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, 
+
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler,
                                   batch_size=args.train_batch_size, num_workers=4, pin_memory=True)
     args.max_steps = args.epoch*len(train_dataloader)
     t_total = args.max_steps // args.gradient_accumulation_steps
@@ -272,14 +272,14 @@ def train(args, train_dataset, model, tokenizer):
                     torch.distributed.get_world_size() if args.local_rank != -1 else 1))
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", t_total)
-    
+
     global_step = args.start_step
     tr_loss, logging_loss, avg_loss, tr_nb, tr_num, train_loss = 0.0, 0.0, 0.0, 0, 0, 0
     best_mrr = 0.0
     best_acc = 0.0
     best_f1 = 0.0
     model.zero_grad()
-    for idx in range(args.start_epoch, int(args.num_train_epochs)): 
+    for idx in range(args.start_epoch, int(args.num_train_epochs)):
         bar = tqdm(train_dataloader, total=len(train_dataloader))
         tr_num = 0
         train_loss = 0
@@ -355,7 +355,7 @@ def train(args, train_dataset, model, tokenizer):
                 logger.info("  %s = %s", key, round(value, 4))
             # Save model checkpoint
         if results['F1'] > best_f1:
-        #if results['eval_acc'] > best_acc:
+            #if results['eval_acc'] > best_acc:
             best_f1 = results['F1']
             best_precision = results['precision']
             best_recall = results['recall']
@@ -461,9 +461,9 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
     # precision = count / (error_total - error_count + count)  # error_total-error_count：潜在非克隆对中的克隆对数目
     F1 = 2 * precision * correct_recall / (precision + correct_recall)
     results = {'recall': correct_recall,
-              'precision': precision,
-              'F1': F1,
-              'threshold': 0.5}
+               'precision': precision,
+               'F1': F1,
+               'threshold': 0.5}
     for key, value in results.items():
         logger.info("threshold = 0.5 \t %s = %s", key, round(value, 4))
 
@@ -644,7 +644,7 @@ def main():
                         help="An optional input evaluation data file to evaluate the perplexity on (a text file).")
     parser.add_argument("--test_data_file", default=None, type=str,
                         help="An optional input evaluation data file to evaluate the perplexity on (a text file).")
-                    
+
     parser.add_argument("--model_type", default="bert", type=str,
                         help="The model architecture to be fine-tuned.")
     parser.add_argument("--model_name_or_path", default=None, type=str,
@@ -726,7 +726,7 @@ def main():
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
     parser.add_argument('--cnn_size', type=int, default=1, help="For cnn size.")
     parser.add_argument('--filter_size', type=int, default=2, help="For cnn filter size.")
-    
+
     parser.add_argument('--d_size', type=int, default=128, help="For cnn filter size.")
     parser.add_argument('--pkl_file', type=str, default='', help='for dataset path pkl file')
     args = parser.parse_args()
@@ -784,7 +784,7 @@ def main():
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
                                           cache_dir=args.cache_dir if args.cache_dir else None)
-    
+
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                                                 do_lower_case=args.do_lower_case)
     if args.block_size <= 0:
@@ -794,7 +794,7 @@ def main():
         model = model_class.from_pretrained(args.model_name_or_path,
                                             from_tf=bool('.ckpt' in args.model_name_or_path),
                                             config=config,
-                                            cache_dir=args.cache_dir if args.cache_dir else None)    
+                                            cache_dir=args.cache_dir if args.cache_dir else None)
     else:
         model = model_class(config)
 
@@ -823,21 +823,21 @@ def main():
     # Evaluation
     results = {}
     if args.do_eval and args.local_rank in [-1, 0]:
-            checkpoint_prefix = 'checkpoint-best-acc/model.bin'
-            output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
-            # model.load_state_dict(torch.load(output_dir))
-            model.to(args.device)
-            result = evaluate(args, model, tokenizer, 8)
-            logger.info("***** Eval results *****")
-            for key in sorted(result.keys()):
-                logger.info("  %s = %s", key, str(round(result[key], 4)))
-            
+        checkpoint_prefix = 'checkpoint-best-acc/model.bin'
+        output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
+        # model.load_state_dict(torch.load(output_dir))
+        model.to(args.device)
+        result = evaluate(args, model, tokenizer, 8)
+        logger.info("***** Eval results *****")
+        for key in sorted(result.keys()):
+            logger.info("  %s = %s", key, str(round(result[key], 4)))
+
     if args.do_test and args.local_rank in [-1, 0]:
-            checkpoint_prefix = 'checkpoint-best-acc/model.bin'
-            output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
-            model.load_state_dict(torch.load(output_dir))                  
-            model.to(args.device)
-            test(args, model, tokenizer)
+        checkpoint_prefix = 'checkpoint-best-acc/model.bin'
+        output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
+        model.load_state_dict(torch.load(output_dir))
+        model.to(args.device)
+        test(args, model, tokenizer)
 
     return results
 

@@ -29,20 +29,23 @@ import pickle
 import random
 import re
 import shutil
+
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 import sys
+
 sys.path.append('/home/EPVD/')
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler,TensorDataset
+from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 import torch.nn.functional as F
 import json
-from sklearn.metrics import recall_score,precision_score,f1_score
+from sklearn.metrics import recall_score, precision_score, f1_score
 from tqdm import tqdm, trange
 import multiprocessing
-from model_attention import Model
+from model_lstm import Model
+
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
                           BertConfig, BertForMaskedLM, BertTokenizer,
@@ -102,6 +105,7 @@ class CloneFeatures(object):
         self.ne_path_embeds = ne_path_embeds
         self.label = label
 
+
 def convert_examples_to_features_clone(js, tokenizer, path_dict, args):
     codes_paths = []  # 3*3*……
     for i in [1, 2, 3]:
@@ -155,6 +159,7 @@ def convert_examples_to_features_clone_eval(js, tokenizer, path_dict, args):
         codes_paths.append(path_embeds)
     return CloneFeatures(codes_paths[0], codes_paths[1], label=js['label'])
 
+
 # 输入为未预处理excel生成的jsonl。
 # class JsonDataset(Dataset):
 class TrainDataset(Dataset):
@@ -182,6 +187,7 @@ class TrainDataset(Dataset):
                 self.examples[i].po_path_embeds,
                 self.examples[i].ne_path_embeds)
 
+
 class EvalDataset(Dataset):
     def __init__(self, tokenizer, args, file_path=None):
         self.examples = []
@@ -207,6 +213,7 @@ class EvalDataset(Dataset):
                 self.examples[i].po_path_embeds,
                 self.examples[i].label)
 
+
 def set_seed(seed=42):
     random.seed(seed)
     os.environ['PYHTONHASHSEED'] = str(seed)
@@ -215,15 +222,16 @@ def set_seed(seed=42):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
 
+
 def train(args, train_dataset, model, tokenizer):
     """ Train the model """
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
 
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler,
                                   batch_size=args.train_batch_size, num_workers=4, pin_memory=True)
-    args.max_steps = args.epoch*len(train_dataloader)
+    args.max_steps = args.epoch * len(train_dataloader)
     t_total = args.max_steps // args.gradient_accumulation_steps
-    args.save_steps = len(train_dataloader) # 有多少个batch
+    args.save_steps = len(train_dataloader)  # 有多少个batch
     args.warmup_steps = len(train_dataloader)
     args.logging_steps = len(train_dataloader)
     args.num_train_epochs = args.epoch
@@ -236,7 +244,7 @@ def train(args, train_dataset, model, tokenizer):
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=t_total*0.1,
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=t_total * 0.1,
                                                 num_training_steps=t_total)
     if args.fp16:
         try:
@@ -332,7 +340,7 @@ def train(args, train_dataset, model, tokenizer):
             # if avg_loss == 0:
             #     avg_loss = tr_loss
             # avg_loss = round(train_loss/tr_num, 5)
-            avg_loss = round(train_loss/tr_num, 5)
+            avg_loss = round(train_loss / tr_num, 5)
             bar.set_description("epoch {} loss {}".format(idx, avg_loss))
             global_step += 1
 
@@ -355,21 +363,20 @@ def train(args, train_dataset, model, tokenizer):
                 logger.info("  %s = %s", key, round(value, 4))
             # Save model checkpoint
         if results['F1'] > best_f1:
-            #if results['eval_acc'] > best_acc:
+            # if results['eval_acc'] > best_acc:
             best_f1 = results['F1']
             best_precision = results['precision']
             best_recall = results['recall']
             best_threshold = results['threshold']
-            logger.info("  "+"*"*20)
+            logger.info("  " + "*" * 20)
             logger.info("  Best f1:%s", round(best_f1, 4))
-            logger.info("  "+"*"*20)
+            logger.info("  " + "*" * 20)
             logger.info("  Recall:%s", best_recall)
             logger.info("  " + "*" * 20)
             logger.info("  Precision:%s", best_precision)
             logger.info("  " + "*" * 20)
             logger.info("  threshold:%s", best_threshold)
             logger.info("  " + "*" * 20)
-
 
             checkpoint_prefix = 'checkpoint-best-acc'
             output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
@@ -395,7 +402,8 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
 
     # Note that DistributedSampler samples randomly
     eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size,num_workers=4,pin_memory=True)
+    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, num_workers=4,
+                                 pin_memory=True)
 
     # multi-gpu evaluate
     if args.n_gpu > 1 and eval_when_training is False:
@@ -418,7 +426,7 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
         with torch.no_grad():
             ac_dis = model(anchor, positive)
         label = label.unsqueeze(1)
-        label_pre = torch.cat((label,ac_dis), dim=1)
+        label_pre = torch.cat((label, ac_dis), dim=1)
         total += label_pre.tolist()
         # cos_right += ap_dis.tolist()
         # cos_wrong += an_dis.tolist()
@@ -801,7 +809,6 @@ def main():
     # input_text =
     # input_ids =
     # outputs
-
 
     model = Model(model, config, tokenizer, args)
     if args.local_rank == 0:

@@ -44,7 +44,6 @@ import json
 from sklearn.metrics import recall_score, precision_score, f1_score
 from tqdm import tqdm, trange
 import multiprocessing
-from model_embeddings import Model
 
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,

@@ -29,25 +29,23 @@ import pickle
 import random
 import re
 import shutil
-
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 import sys
-
 sys.path.append('/home/EPVD/')
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler, TensorDataset
+from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler,TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 import torch.nn.functional as F
 import json
-from sklearn.metrics import recall_score, precision_score, f1_score
+from sklearn.metrics import recall_score,precision_score,f1_score
 from tqdm import tqdm, trange
 import multiprocessing
-from model import Model
-
+from model_textcnn import Model
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
+                          get_cosine_with_hard_restarts_schedule_with_warmup,
                           BertConfig, BertForMaskedLM, BertTokenizer,
                           GPT2Config, GPT2LMHeadModel, GPT2Tokenizer,
                           OpenAIGPTConfig, OpenAIGPTLMHeadModel, OpenAIGPTTokenizer,
@@ -67,7 +65,7 @@ MODEL_CLASSES = {
 sys.path.append('..')
 
 import parserTool.parse as ps
-from c_cfg import C_CFG
+from c_cfg_3 import C_CFG
 from parserTool.utils import remove_comments_and_docstrings
 from parserTool.parse import Lang
 import pickle
@@ -89,33 +87,34 @@ def extract_pathtoken(source, path_sequence):
         for i in source:
             seq_code += source[i]
         seqtoken_out.append(seq_code)
-    seqtoken_out = sorted(seqtoken_out, key=lambda i: len(i), reverse=False)
+    # seqtoken_out = sorted(seqtoken_out, key=lambda i: len(i), reverse=False)
     return seqtoken_out
 
 
 class CloneFeatures(object):
     def __init__(self,
-                 an_all_seq_ids,
-                 po_all_seq_ids,
-                 ne_all_seq_ids,
+                 an_path_embeds,
+                 po_path_embeds,
+                 ne_path_embeds=None,
+                 label=None,
                  ):
-        self.an_all_seq_ids = an_all_seq_ids
-        self.po_all_seq_ids = po_all_seq_ids
-        self.ne_all_seq_ids = ne_all_seq_ids
-
+        self.an_path_embeds = an_path_embeds
+        self.po_path_embeds = po_path_embeds
+        self.ne_path_embeds = ne_path_embeds
+        self.label = label
 
 def convert_examples_to_features_clone(js, tokenizer, path_dict, args):
     codes_paths = []  # 3*3*……
     for i in [1, 2, 3]:
-        clean_code, code_dict = remove_comments_and_docstrings(js[f'code{i}'], 'java')
+        # clean_code, code_dict = remove_comments_and_docstrings(js[f'code{i}'], 'java')
 
         # source
-        pre_code = ' '.join(clean_code.split())
-        code_tokens = tokenizer.tokenize(pre_code)[:args.block_size - 2]
-        source_tokens = [tokenizer.cls_token] + code_tokens + [tokenizer.sep_token]
-        source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
-        padding_length = args.block_size - len(source_ids)
-        source_ids += [tokenizer.pad_token_id] * padding_length
+        # pre_code = ' '.join(clean_code.split())
+        # code_tokens = tokenizer.tokenize(pre_code)[:args.block_size - 2]
+        # source_tokens = [tokenizer.cls_token] + code_tokens + [tokenizer.sep_token]
+        # source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
+        # padding_length = args.block_size - len(source_ids)
+        # source_ids += [tokenizer.pad_token_id] * padding_length
 
         # paths
         # g = C_CFG()
@@ -123,114 +122,43 @@ def convert_examples_to_features_clone(js, tokenizer, path_dict, args):
         # s_ast = g.parse_ast_file(code_ast.root_node)
         # num_path, cfg_allpath, _, _ = g.get_allpath()
         # path_tokens1 = extract_pathtoken(code_dict, cfg_allpath)
-        path_tokens1, cfg_allpath = path_dict[js[f'idx{i}']]
-
-        all_seq_ids = []
-        for seq in path_tokens1:
-            seq_tokens = tokenizer.tokenize(seq)[:args.block_size - 2]
-            seq_tokens = [tokenizer.cls_token] + seq_tokens + [tokenizer.sep_token]
-            seq_ids = tokenizer.convert_tokens_to_ids(seq_tokens)
-            padding_length = args.block_size - len(seq_ids)
-            seq_ids += [tokenizer.pad_token_id] * padding_length
-            all_seq_ids.append(seq_ids)
-
-        if len(all_seq_ids) < args.filter_size:
-            for j in range(args.filter_size - len(all_seq_ids)):
-                all_seq_ids.append(source_ids)
-        else:
-            all_seq_ids = all_seq_ids[:args.filter_size]
-        codes_paths.append(all_seq_ids)
-    return CloneFeatures(codes_paths[0], codes_paths[1], codes_paths[2])
+        path_embeds, cfg_allpath = path_dict[js[f'idx{i}']]
+        path_embeds = torch.tensor(path_embeds, dtype=torch.float32)
+        path_embeds = path_embeds[:args.filter_size]
+        
+        codes_paths.append(path_embeds)
+    return CloneFeatures(codes_paths[0], codes_paths[1], ne_path_embeds=codes_paths[2])
 
 
-# class InputFeatures(object):
-#     """A single training/test features for a example."""
-#     def __init__(self,
-#                  input_tokens,
-#                  input_ids,
-#                  path_source,
-#                  idx,
-#                  label,
-#     ):
-#         self.input_tokens = input_tokens
-#         self.input_ids = input_ids
-#         self.path_source = path_source
-#         self.idx = str(idx)
-#         self.label = label
-#
-#
-# def convert_examples_to_features(js, tokenizer, path_dict, args):
-#     clean_code, code_dict = remove_comments_and_docstrings(js['func'], 'c')
-#
-#     #source
-#     code = ' '.join(clean_code.split())
-#     code_tokens = tokenizer.tokenize(code)[:args.block_size-2]
-#     source_tokens = [tokenizer.cls_token]+code_tokens+[tokenizer.sep_token]
-#     source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
-#     padding_length = args.block_size - len(source_ids)
-#     source_ids += [tokenizer.pad_token_id]*padding_length
-#
-#     if js['idx'] in path_dict:
-#         path_tokens1, cfg_allpath = path_dict[js['idx']]
-#     else:
-#         clean_code, code_dict = remove_comments_and_docstrings(js['func'], 'c')
-#         g = C_CFG()
-#         code_ast = ps.tree_sitter_ast(clean_code, Lang.C)
-#         s_ast = g.parse_ast_file(code_ast.root_node)
-#         num_path, cfg_allpath = g.get_allpath()
-#         path_tokens1 = extract_pathtoken(code_dict, cfg_allpath)
-#
-#     all_seq_ids = []
-#     for seq in path_tokens1:
-#         seq_tokens = tokenizer.tokenize(seq)[:args.block_size - 2]
-#         seq_tokens = [tokenizer.cls_token] + seq_tokens + [tokenizer.sep_token]
-#         seq_ids = tokenizer.convert_tokens_to_ids(seq_tokens)
-#         padding_length = args.block_size - len(seq_ids)
-#         seq_ids += [tokenizer.pad_token_id] * padding_length
-#         all_seq_ids.append(seq_ids)
-#
-#     if len(all_seq_ids) < args.filter_size:
-#         for i in range(args.filter_size - len(all_seq_ids)):
-#             all_seq_ids.append(source_ids)
-#     else:
-#         all_seq_ids = all_seq_ids[:args.filter_size]
-#     return InputFeatures(source_tokens, source_ids, all_seq_ids, js['idx'], js['target'])
+def convert_examples_to_features_clone_eval(js, tokenizer, path_dict, args):
+    codes_paths = []  # 3*3*……
+    for i in [1, 2]:
+        # clean_code, code_dict = remove_comments_and_docstrings(js[f'code{i}'], 'java')
 
+        # source
+        # pre_code = ' '.join(clean_code.split())
+        # code_tokens = tokenizer.tokenize(pre_code)[:args.block_size - 2]
+        # source_tokens = [tokenizer.cls_token] + code_tokens + [tokenizer.sep_token]
+        # source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
+        # padding_length = args.block_size - len(source_ids)
+        # source_ids += [tokenizer.pad_token_id] * padding_length
 
-# class TextDataset(Dataset):
-#     def __init__(self, tokenizer, args, file_path=None):
-#         self.examples = []
-#         pkl_file = open(args.pkl_file, 'rb')
-#         path_dict = pickle.load(pkl_file)
-#
-#         with open(file_path) as f:
-#             for line in f:
-#                 js = json.loads(line.strip())
-#                 self.examples.append(convert_examples_to_features(js, tokenizer, path_dict, args))
-#
-#         if 'train' in file_path:
-#             for idx, example in enumerate(self.examples[:3]):
-#                     logger.info("*** Example ***")
-#                     logger.info("idx: {}".format(idx))
-#                     logger.info("label: {}".format(example.label))
-#                     logger.info("input_tokens: {}".format([x.replace('\u0120', '_') for x in example.input_tokens]))
-#                     logger.info("input_ids: {}".format(' '.join(map(str, example.input_ids))))
-#         pkl_file.close()
-#
-#     def __len__(self):
-#         return len(self.examples)
-#
-#     def __getitem__(self, i):
-#         # 整体代码ids表示，label，各路径的ids表示
-#         return torch.tensor(self.examples[i].input_ids), torch.tensor(self.examples[i].label),
-#         torch.tensor(self.examples[i].path_source)
+        # paths
+        # g = C_CFG()
+        # code_ast = ps.tree_sitter_ast(clean_code, Lang.JAVA)
+        # s_ast = g.parse_ast_file(code_ast.root_node)
+        # num_path, cfg_allpath, _, _ = g.get_allpath()
+        # path_tokens1 = extract_pathtoken(code_dict, cfg_allpath)
+        path_embeds, cfg_allpath = path_dict[js[f'idx{i}']]
+        path_embeds = torch.tensor(path_embeds, dtype=torch.float32)
+        path_embeds = path_embeds[:args.filter_size]
+
+        codes_paths.append(path_embeds)
+    return CloneFeatures(codes_paths[0], codes_paths[1], label=js['label'])
 
 # 输入为未预处理excel生成的jsonl。
 # class JsonDataset(Dataset):
-
-
-# 输入是excel文件，对每一行进行遍历处理
-class ExcelDataset(Dataset):
+class TrainDataset(Dataset):
     def __init__(self, tokenizer, args, file_path=None):
         self.examples = []
         # pkl_file = open(args.pkl_file, 'rb')
@@ -251,10 +179,34 @@ class ExcelDataset(Dataset):
         return len(self.examples)
 
     def __getitem__(self, i):
-        return (torch.tensor(self.examples[i].an_all_seq_ids),
-                torch.tensor(self.examples[i].po_all_seq_ids),
-                torch.tensor(self.examples[i].ne_all_seq_ids))
+        return (self.examples[i].an_path_embeds,
+                self.examples[i].po_path_embeds,
+                self.examples[i].ne_path_embeds)
 
+class EvalDataset(Dataset):
+    def __init__(self, tokenizer, args, file_path=None):
+        self.examples = []
+        # pkl_file = open(args.pkl_file, 'rb')
+        # path_dict = pickle.load(pkl_file)
+        pkl_file = open(args.pkl_file, 'rb')
+        path_dict = pickle.load(pkl_file)
+
+        with open(file_path, encoding="UTF-8") as f1:
+            for idx, line in enumerate(f1):
+                js = json.loads(line.strip())
+                # idx_list = line.strip().split(',')
+                # for idx in idx_list:
+                #     code = open(f"../test_dataset/id2sourcecode/{idx}.java", encoding='UTF-8').read()
+                #     group.append(code)
+                self.examples.append(convert_examples_to_features_clone_eval(js, tokenizer, path_dict, args))
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, i):
+        return (self.examples[i].an_path_embeds,
+                self.examples[i].po_path_embeds,
+                self.examples[i].label)
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -264,15 +216,15 @@ def set_seed(seed=42):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
 
-
 def train(args, train_dataset, model, tokenizer):
-    """ Train the model """
+    """ Train the model """ 
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler,
+    
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, 
                                   batch_size=args.train_batch_size, num_workers=4, pin_memory=True)
-    args.max_steps = args.epoch * len(train_dataloader)
-    args.save_steps = len(train_dataloader)  # 有多少个batch
+    args.max_steps = args.epoch*len(train_dataloader)
+    t_total = args.max_steps // args.gradient_accumulation_steps
+    args.save_steps = len(train_dataloader) # 有多少个batch
     args.warmup_steps = len(train_dataloader)
     args.logging_steps = len(train_dataloader)
     args.num_train_epochs = args.epoch
@@ -285,8 +237,10 @@ def train(args, train_dataset, model, tokenizer):
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.max_steps * 0.1,
-                                                num_training_steps=args.max_steps)
+    # scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=t_total*0.1,
+    #                                             num_training_steps=t_total)
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=t_total*0.1,
+                                                num_training_steps=t_total)
     if args.fp16:
         try:
             from apex import amp
@@ -320,15 +274,15 @@ def train(args, train_dataset, model, tokenizer):
                 args.train_batch_size * args.gradient_accumulation_steps * (
                     torch.distributed.get_world_size() if args.local_rank != -1 else 1))
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
-    logger.info("  Total optimization steps = %d", args.max_steps)
-
+    logger.info("  Total optimization steps = %d", t_total)
+    
     global_step = args.start_step
     tr_loss, logging_loss, avg_loss, tr_nb, tr_num, train_loss = 0.0, 0.0, 0.0, 0, 0, 0
     best_mrr = 0.0
     best_acc = 0.0
     best_f1 = 0.0
     model.zero_grad()
-    for idx in range(args.start_epoch, int(args.num_train_epochs)):
+    for idx in range(args.start_epoch, int(args.num_train_epochs)): 
         bar = tqdm(train_dataloader, total=len(train_dataloader))
         tr_num = 0
         train_loss = 0
@@ -340,16 +294,19 @@ def train(args, train_dataset, model, tokenizer):
             positive = batch[1].to(args.device)
             negative = batch[2].to(args.device)
             model.train()
-            an_logits, po_logits, ne_logits = model(anchor, positive, negative)  # [Batchsize,768]
+            ap_dis, an_dis = model(anchor, positive, negative)  # [Batchsize,768]
+
+            margin = 1
+            # losses = F.relu(ap_dis - an_dis + margin)
+            losses = F.relu(ap_dis - an_dis + margin) + F.relu(ap_dis - 0.5) + F.relu(0.5 - an_dis)
+            loss = losses.mean()
 
             # 计算triplet loss
-            cos_pos = (nn.CosineSimilarity(dim=1)(an_logits, po_logits) * 0.5) + 0.5  # [Batchsize]
-            cos_neg = (nn.CosineSimilarity(dim=1)(an_logits, ne_logits) * 0.5) + 0.5
-            cos_pos = cos_pos.pow(2)
-            cos_neg = cos_neg.pow(2)
-            margin = 1
-            losses = F.relu(cos_pos - cos_neg + margin)  # [2]
-            loss = losses.mean()  # tensor(1.0089)
+            # cos_pos = 0.5 - (nn.CosineSimilarity(dim=1)(an_logits, po_logits) * 0.5)  # [Batchsize]
+            # cos_neg = 0.5 - (nn.CosineSimilarity(dim=1)(an_logits, ne_logits) * 0.5)
+            # margin = 1
+            # losses = F.relu(cos_pos - cos_neg + margin)   # [2]
+            # loss = losses.mean()   # tensor(1.0089)
 
             # logger.info("**********")
             # logger.info(f"{type(cos_pos)}")
@@ -371,14 +328,14 @@ def train(args, train_dataset, model, tokenizer):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
             loss = loss * args.gradient_accumulation_steps
-            # TODO 这里的loss需要求平均吗？
-            # TODO 可以求一下当前epochs的平均，方便看出整体变化趋势
+            # DONE 这里的loss需要求平均吗？ 不用
+            # DONE 可以求一下当前epochs的平均，方便看出整体变化趋势
             tr_num += 1
             train_loss += loss.item()
             # if avg_loss == 0:
             #     avg_loss = tr_loss
             # avg_loss = round(train_loss/tr_num, 5)
-            avg_loss = round(train_loss / tr_num, 5)
+            avg_loss = round(train_loss/tr_num, 5)
             bar.set_description("epoch {} loss {}".format(idx, avg_loss))
             global_step += 1
 
@@ -401,20 +358,21 @@ def train(args, train_dataset, model, tokenizer):
                 logger.info("  %s = %s", key, round(value, 4))
             # Save model checkpoint
         if results['F1'] > best_f1:
-            # if results['eval_acc'] > best_acc:
+        #if results['eval_acc'] > best_acc:
             best_f1 = results['F1']
             best_precision = results['precision']
             best_recall = results['recall']
             best_threshold = results['threshold']
-            logger.info("  " + "*" * 20)
+            logger.info("  "+"*"*20)
             logger.info("  Best f1:%s", round(best_f1, 4))
-            logger.info("  " + "*" * 20)
+            logger.info("  "+"*"*20)
             logger.info("  Recall:%s", best_recall)
             logger.info("  " + "*" * 20)
             logger.info("  Precision:%s", best_precision)
             logger.info("  " + "*" * 20)
             logger.info("  threshold:%s", best_threshold)
             logger.info("  " + "*" * 20)
+
 
             checkpoint_prefix = 'checkpoint-best-acc'
             output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
@@ -433,15 +391,14 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_output_dir = args.output_dir
 
-    eval_dataset = ExcelDataset(tokenizer, args, args.eval_data_file)
+    eval_dataset = EvalDataset(tokenizer, args, args.eval_data_file)
 
     if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(eval_output_dir)
 
     # Note that DistributedSampler samples randomly
     eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, num_workers=4,
-                                 pin_memory=True)
+    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size,num_workers=4,pin_memory=True)
 
     # multi-gpu evaluate
     if args.n_gpu > 1 and eval_when_training is False:
@@ -454,67 +411,88 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
     eval_loss = 0.0
     nb_eval_steps = 0
     model.eval()
-    cos_right = []
-    cos_wrong = []
+    total = []
+    # cos_right = []
+    # cos_wrong = []
     for batch in eval_dataloader:
         anchor = batch[0].to(args.device)
         positive = batch[1].to(args.device)
-        negative = batch[2].to(args.device)
+        label = batch[2].to(args.device)
         with torch.no_grad():
-            an_logits, po_logits, ne_logits = model(anchor, positive, negative)
-        cos_r = (nn.CosineSimilarity(dim=1)(an_logits, po_logits) + 1) * 0.5
-        cos_right += cos_r.tolist()
-        cos_w = (nn.CosineSimilarity(dim=1)(an_logits, ne_logits) + 1) * 0.5
-        cos_wrong += cos_w.tolist()
+            ac_dis = model(anchor, positive)
+        label = label.unsqueeze(1)
+        label_pre = torch.cat((label,ac_dis), dim=1)
+        total += label_pre.tolist()
+        # cos_right += ap_dis.tolist()
+        # cos_wrong += an_dis.tolist()
     temp_best_f1 = 0
     temp_best_recall = 0
     temp_best_precision = 0
-    temp_count = 0
-    temp_error_count = 0
-    temp_error_total = 0
-    temp_total = 0
+    temp_tp = 0
+    temp_tn = 0
+    temp_fp = 0
+    temp_fn = 0
     temp_best_threshold = 0
 
-    count = 0
-    error_count = 0
+    # count = 0
+    # error_count = 0
+    tp, fp, tn, fn = 0, 0, 0, 0
     threshold = 0.5
-    for h in cos_right:
-        if h >= threshold:
-            count += 1  # 实测克隆对个数TP
-    total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
-    for h in cos_wrong:
-        if h < threshold:
-            error_count += 1  # 实测非克隆对个数TN
-    error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
-    correct_recall = count / total
-    precision = count / (error_total - error_count + count)  # error_total-error_count：潜在非克隆对中的克隆对数目
+    for h in total:
+        if h[0] == 1:
+            if h[1] <= threshold:
+                tp += 1
+            else:
+                fn += 1
+        if h[0] == 0:
+            if h[1] <= threshold:
+                fp += 1
+            else:
+                tn += 1
+    precision = tp / (tp + fp)
+    correct_recall = tp / (tp + fn)
+
+    # for h in cos_right:
+    #     if h[0] <= threshold:
+    #         count += 1  # 实测克隆对个数TP
+    # total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
+    # for h in cos_wrong:
+    #     if h[0] > threshold:
+    #         error_count += 1  # 实测非克隆对个数TN
+    # error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
+    # correct_recall = count / total
+    # precision = count / (error_total - error_count + count)  # error_total-error_count：潜在非克隆对中的克隆对数目
     F1 = 2 * precision * correct_recall / (precision + correct_recall)
     results = {'recall': correct_recall,
-               'precision': precision,
-               'F1': F1,
-               'threshold': 0.5}
+              'precision': precision,
+              'F1': F1,
+              'threshold': 0.5}
     for key, value in results.items():
         logger.info("threshold = 0.5 \t %s = %s", key, round(value, 4))
 
     x = []
     y = []
-    for k in tqdm(range(1, 100)):
-
-        count = 0
-        error_count = 0
+    for k in range(1, 100):
         threshold = k / 100
-        for h in cos_right:
-            if h >= threshold:
-                count += 1  # 实测克隆对个数TP
-        total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
-        for h in cos_wrong:
-            if h < threshold:
-                error_count += 1  # 实测非克隆对个数TN
-        error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
-        correct_recall = count / total
-        if error_total - error_count + count == 0:
+        tp, fp, tn, fn = 0, 0, 0, 0
+        for h in total:
+            if h[0] == 1:
+                if h[1] <= threshold:
+                    tp += 1
+                else:
+                    fn += 1
+            if h[0] == 0:
+                if h[1] <= threshold:
+                    fp += 1
+                else:
+                    tn += 1
+        if tp + fp == 0:
             continue
-        precision = count / (error_total - error_count + count)  # error_total-error_count：潜在非克隆对中的克隆对数目
+        precision = tp / (tp + fp)
+        if tp + fn == 0:
+            continue
+        correct_recall = tp / (tp + fn)
+
         if precision + correct_recall == 0:
             continue
         F1 = 2 * precision * correct_recall / (precision + correct_recall)
@@ -525,17 +503,17 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
             temp_best_f1 = F1
             temp_best_recall = correct_recall
             temp_best_precision = precision
-            temp_count = count
-            temp_error_count = error_count
-            temp_error_total = error_total
-            temp_total = total
             temp_best_threshold = threshold
+            temp_tp = tp
+            temp_tn = tn
+            temp_fp = fp
+            temp_fn = fn
     plt.plot(x, y, marker='o', linestyle='-', markersize=2)
     max_y = max(y)
     max_x = x[y.index(max_y)]
     plt.text(max_x, max_y, f'({max_x}, {max_y})', ha='right')
     plt.savefig(f'line_plot{idx}.png')
-    print("eval_loss", temp_count, temp_error_count, temp_total, temp_error_total)
+    print("eval_loss", temp_tp, temp_tn, temp_fp, temp_fn)
     result = {'recall': temp_best_recall,
               'precision': temp_best_precision,
               'F1': temp_best_f1,
@@ -545,7 +523,7 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
 
 def test(args, model, tokenizer):
     # Loop to handle MNLI double evaluation (matched, mis-matched)
-    eval_dataset = ExcelDataset(tokenizer, args, args.test_data_file)
+    eval_dataset = EvalDataset(tokenizer, args, args.test_data_file)
 
     # Note that DistributedSampler samples randomly
     eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
@@ -589,11 +567,11 @@ def test(args, model, tokenizer):
         best_threshold = 0.32
     logger.info("using eval_threshold: %s", best_threshold)
     for i in cos_right:
-        if i >= best_threshold:
+        if i[0] <= best_threshold:
             count += 1
     total = len(cos_right)
     for i in cos_wrong:
-        if i < best_threshold:
+        if i[0] > best_threshold:
             error_count += 1
     error_total = len(cos_wrong)
     correct_recall = count / total
@@ -604,16 +582,16 @@ def test(args, model, tokenizer):
     for key in sorted(result.keys()):
         logger.info("  %s = %s", key, str(result[key]))
 
-    for k in tqdm(range(1, 100)):
+    for k in range(1, 100):
         count = 0
         error_count = 0
         threshold = k / 100
         for h in cos_right:
-            if h >= threshold:
+            if h[0] <= threshold:
                 count += 1  # 实测克隆对个数TP
         total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
         for h in cos_wrong:
-            if h < threshold:
+            if h[0] > threshold:
                 error_count += 1  # 实测非克隆对个数TN
         error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
         correct_recall = count / total
@@ -669,7 +647,7 @@ def main():
                         help="An optional input evaluation data file to evaluate the perplexity on (a text file).")
     parser.add_argument("--test_data_file", default=None, type=str,
                         help="An optional input evaluation data file to evaluate the perplexity on (a text file).")
-
+                    
     parser.add_argument("--model_type", default="bert", type=str,
                         help="The model architecture to be fine-tuned.")
     parser.add_argument("--model_name_or_path", default=None, type=str,
@@ -705,7 +683,7 @@ def main():
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--eval_batch_size", default=4, type=int,
                         help="Batch size per GPU/CPU for evaluation.")
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=6,
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
     parser.add_argument("--learning_rate", default=5e-5, type=float,
                         help="The initial learning rate for Adam.")
@@ -751,7 +729,7 @@ def main():
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
     parser.add_argument('--cnn_size', type=int, default=1, help="For cnn size.")
     parser.add_argument('--filter_size', type=int, default=2, help="For cnn filter size.")
-
+    
     parser.add_argument('--d_size', type=int, default=128, help="For cnn filter size.")
     parser.add_argument('--pkl_file', type=str, default='', help='for dataset path pkl file')
     args = parser.parse_args()
@@ -769,7 +747,6 @@ def main():
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         args.n_gpu = torch.cuda.device_count()
-        print(args.n_gpu)
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
@@ -810,7 +787,7 @@ def main():
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
                                           cache_dir=args.cache_dir if args.cache_dir else None)
-
+    
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                                                 do_lower_case=args.do_lower_case)
     if args.block_size <= 0:
@@ -820,13 +797,14 @@ def main():
         model = model_class.from_pretrained(args.model_name_or_path,
                                             from_tf=bool('.ckpt' in args.model_name_or_path),
                                             config=config,
-                                            cache_dir=args.cache_dir if args.cache_dir else None)
+                                            cache_dir=args.cache_dir if args.cache_dir else None)    
     else:
         model = model_class(config)
 
     # input_text =
     # input_ids =
     # outputs
+
 
     model = Model(model, config, tokenizer, args)
     if args.local_rank == 0:
@@ -835,34 +813,34 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
 
     # Training
-    # if args.do_train:
-    #     if args.local_rank not in [-1, 0]:
-    #         torch.distributed.barrier()  # Barrier to make sure only the first process in distributed training process the dataset, and the others will use the cache
-    #
-    #     train_dataset = ExcelDataset(tokenizer, args, args.train_data_file)
-    #     if args.local_rank == 0:
-    #         torch.distributed.barrier()
-    #
-    #     train(args, train_dataset, model, tokenizer)
+    if args.do_train:
+        if args.local_rank not in [-1, 0]:
+            torch.distributed.barrier()  # Barrier to make sure only the first process in distributed training process the dataset, and the others will use the cache
+
+        train_dataset = TrainDataset(tokenizer, args, args.train_data_file)
+        if args.local_rank == 0:
+            torch.distributed.barrier()
+
+        train(args, train_dataset, model, tokenizer)
 
     # Evaluation
     results = {}
     if args.do_eval and args.local_rank in [-1, 0]:
-        # checkpoint_prefix = 'checkpoint-best-acc/model.bin'
-        # output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
-        # model.load_state_dict(torch.load(output_dir))
-        model.to(args.device)
-        result = evaluate(args, model, tokenizer, 8)
-        logger.info("***** Eval results *****")
-        for key in sorted(result.keys()):
-            logger.info("  %s = %s", key, str(round(result[key], 4)))
-
+            checkpoint_prefix = 'checkpoint-best-acc/model.bin'
+            output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
+            # model.load_state_dict(torch.load(output_dir))
+            model.to(args.device)
+            result = evaluate(args, model, tokenizer, 8)
+            logger.info("***** Eval results *****")
+            for key in sorted(result.keys()):
+                logger.info("  %s = %s", key, str(round(result[key], 4)))
+            
     if args.do_test and args.local_rank in [-1, 0]:
-        checkpoint_prefix = 'checkpoint-best-acc/model.bin'
-        output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
-        model.load_state_dict(torch.load(output_dir))
-        model.to(args.device)
-        test(args, model, tokenizer)
+            checkpoint_prefix = 'checkpoint-best-acc/model.bin'
+            output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
+            model.load_state_dict(torch.load(output_dir))                  
+            model.to(args.device)
+            test(args, model, tokenizer)
 
     return results
 

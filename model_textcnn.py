@@ -90,7 +90,7 @@ class DistanceClassifier(nn.Module):
         return output
 
 
-class CNNClassificationSeq(nn.Module):
+class CNNFuse(nn.Module):
     """Head for sentence-level classification tasks."""
 
     def __init__(self, config, args):
@@ -147,8 +147,8 @@ class Model(nn.Module):
         self.linear = nn.Linear(3, 1)  # 3->5
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-        self.cnnclassifier = CNNClassificationSeq(config, self.args)
-        self.distancecal = DistanceClassifier(config, 2 * config.hidden_size, 2 * self.args.d_size)  # [2*768,2*128]
+        self.cnn_fuse = CNNFuse(config, self.args)
+        self.distance_cal = DistanceClassifier(config, 2 * config.hidden_size, 2 * self.args.d_size)  # [2*768,2*128]
 
     # 计算代码表示
     def enc(self, seq_embeds):
@@ -162,19 +162,19 @@ class Model(nn.Module):
         # outputs_seq = self.dropout(outputs_seq)
 
         # 计算代码表示Z
-        return self.cnnclassifier(outputs_seq)
+        return self.cnn_fuse(outputs_seq)
 
     def forward(self, anchor, positive, negative=None):
         if negative is not None:
             an_logits = self.enc(anchor)        # [B, 768]
             po_logits = self.enc(positive)
             ne_logits = self.enc(negative)
-            ap_dis = self.distancecal(an_logits, po_logits)
-            an_dis = self.distancecal(an_logits, ne_logits)
+            ap_dis = self.distance_cal(an_logits, po_logits)
+            an_dis = self.distance_cal(an_logits, ne_logits)
 
             return ap_dis, an_dis
         else:
             an_logits = self.enc(anchor)
             co_logits = self.enc(positive)
-            ac_dis = self.distancecal(an_logits, co_logits)
+            ac_dis = self.distance_cal(an_logits, co_logits)
             return ac_dis

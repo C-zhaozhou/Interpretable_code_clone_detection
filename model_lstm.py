@@ -13,72 +13,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class Attention(nn.Module):
-    def __init__(self, dim, args):
-        super(Attention,self).__init__()
-        self.args =args
-        self.linear = nn.Linear(dim*2, dim)
-        self.mask = None
-        self.fc = nn.Linear(self.args.filter_size * dim, dim)
-        #self.adaptavgpool = torch.nn.AdaptiveAvgPool1d(1)
-
-    def set_mask(self,mask):
-        self.mask = torch.ByteTensor(mask).unsqueeze(2).cuda()
-
-    def forward(self, key, query):
-        batch_size = key.size(0)
-        hidden_size = key.size(2)
-        input_size = query.size(1)
-        # (batch, key_len, dim) * (batch, query_len, dim) -> (batch, key_len, query_len)
-        attn = torch.bmm(key, query.transpose(1, 2))
-        if self.mask is not None:
-            attn.data.masked_fill(self.mask, -float('inf'))
-        attn = F.softmax(attn, dim=1)
-
-        # (batch, key_len, query_len) * (batch, query_len, dim) -> (batch, key_len, dim)
-        energy = torch.bmm(attn, query)
-        # concat -> (batch, outlen, 2*dim)
-        combind = torch.cat((energy,key), dim=2)
-        # output -> (batch, out_len, dim)
-        output = torch.tanh(self.linear(combind.view(-1, 2 * hidden_size))).view(batch_size, -1, hidden_size)
-
-        output = output.reshape(batch_size, -1)
-        output = self.fc(output)
-        return output, attn
-
-
-class AttentionFuse(nn.Module):
-    """Head for sentence-level classification tasks."""
-
-    def __init__(self, config, args):
-        super().__init__()
-        self.args = args
-        self.dense = nn.Linear(2 * config.hidden_size, config.hidden_size)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-
-        self.linear = nn.Linear(self.args.filter_size * config.hidden_size, config.hidden_size)
-
-        self.attention = Attention(config.hidden_size, args)
-
-
-    def forward(self, features, **kwargs):
-        # ------------- cnn -------------------------
-        x = torch.unsqueeze(features, dim=1)  # [B, L*D] -> [B, 1, D*L]
-        x = x.reshape(x.shape[0], -1, 768)  # [B, L, D]
-        outputs, _ = self.attention(x, x)                                 # ->[B, 128]
-        # features = self.linear_mlp(features)       # [B, L*D] -> [B, D]
-        features = self.linear(features)  # [B, 3*768] -> [B, 128]
-        x = torch.cat((outputs, features), dim=-1)
-        x = self.dropout(x)
-        x = self.dense(x)
-        # ------------- cnn ----------------------
-
-        # x = torch.tanh(x)
-        # x = self.dropout(x)
-        # x = self.out_proj(x)
-        return x
-
-
 class DistanceClassifier(nn.Module):
     def __init__(self, config, input_size, hidden_size):
         super(DistanceClassifier, self).__init__()
@@ -98,6 +32,39 @@ class DistanceClassifier(nn.Module):
         return output
 
 
+class LSTMFuse(nn.Module):
+    """Head for sentence-level classification tasks."""
+
+    def __init__(self, config, args):
+        super().__init__()
+        self.args = args
+        self.dense = nn.Linear(2 * config.hidden_size, config.hidden_size)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.out_proj = nn.Linear(config.hidden_size, 1)
+        self.linear = nn.Linear(2 * config.hidden_size, config.hidden_size)
+        self.linear_mlp = nn.Linear(self.args.filter_size * config.hidden_size, config.hidden_size)
+        self.rnn = nn.LSTM(config.hidden_size, config.hidden_size, num_layers=3, bidirectional=True, batch_first=True,
+                           dropout=config.hidden_dropout_prob)
+
+    def forward(self, features, **kwargs):
+        x = torch.unsqueeze(features, dim=1)  # [B, L*768] -> [B, 1, L*768]
+        x = x.reshape(x.shape[0], -1, 768)
+        outputs, hidden = self.rnn(x)  # [10, 3, 2*768] []
+
+        x = outputs[:, -1, :]  # [B, L, 2*D] -> [B, 2*D]
+        x = self.linear(x)  # [B, 2*D] -> [B, D]
+        x_ori = self.linear_mlp(features)
+        x = torch.cat((x, x_ori), dim=-1)
+
+        x = self.dropout(x)
+        x = self.dense(x)
+
+        # x = torch.tanh(x)
+        # x = self.dropout(x)
+        # x = self.out_proj(x)
+        return x
+
+
 class Model(nn.Module):
     def __init__(self, encoder, config, tokenizer, args):
         super(Model, self).__init__()
@@ -108,7 +75,7 @@ class Model(nn.Module):
         self.linear = nn.Linear(3, 1)  # 3->5
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-        self.attention_fuse = AttentionFuse(config, self.args)
+        self.lstm_fuse = LSTMFuse(config, self.args)
         self.distance_cal = DistanceClassifier(config, 2 * config.hidden_size, 2 * self.args.d_size)  # [2*768,2*128]
 
     # 计算代码表示
@@ -123,7 +90,7 @@ class Model(nn.Module):
         # outputs_seq = self.dropout(outputs_seq)
 
         # 计算代码表示Z
-        return self.attention_fuse(outputs_seq)
+        return self.lstm_fuse(outputs_seq)
 
     def forward(self, anchor, positive, negative=None):
         if negative is not None:
