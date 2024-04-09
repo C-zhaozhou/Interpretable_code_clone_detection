@@ -42,7 +42,7 @@ import json
 from sklearn.metrics import recall_score,precision_score,f1_score
 from tqdm import tqdm, trange
 import multiprocessing
-from model_multihead_attention import Model
+from model_mlp import Model
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
                           BertConfig, BertForMaskedLM, BertTokenizer,
@@ -235,7 +235,7 @@ def train(args, train_dataset, model, tokenizer):
          'weight_decay': args.weight_decay},
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
-    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=t_total*0.1,
                                                 num_training_steps=t_total)
     if args.fp16:
@@ -295,7 +295,7 @@ def train(args, train_dataset, model, tokenizer):
 
             margin = 1
             # losses = F.relu(ap_dis - an_dis + margin)
-            losses = F.relu(ap_dis - an_dis + margin) + F.relu(ap_dis - 0.2) + F.relu(0.8 - an_dis)
+            losses = F.relu(ap_dis - an_dis + margin) + F.relu(ap_dis - 0.5) + F.relu(0.5 - an_dis)
             loss = losses.mean()
 
             # 计算triplet loss
@@ -728,7 +728,6 @@ def main():
     parser.add_argument('--filter_size', type=int, default=2, help="For cnn filter size.")
 
     parser.add_argument('--d_size', type=int, default=128, help="For cnn filter size.")
-    parser.add_argument('--num_head', type=int, default=1, help="For multi-head attention")
     parser.add_argument('--pkl_file', type=str, default='', help='for dataset path pkl file')
     args = parser.parse_args()
 

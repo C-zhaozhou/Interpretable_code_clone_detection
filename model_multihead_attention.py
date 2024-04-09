@@ -15,20 +15,16 @@ logger = logging.getLogger(__name__)
 import math
 
 
-
 class AdditiveAttention(nn.Module):
     """Additive attention.
 
     Defined in :numref:`subsec_batch_dot`"""
-    def __init__(self, num_hiddens, dropout, **kwargs):
+    def __init__(self, dropout, **kwargs):
         super(AdditiveAttention, self).__init__(**kwargs)
-        self.W_k = nn.LazyLinear(num_hiddens, bias=False)
-        self.W_q = nn.LazyLinear(num_hiddens, bias=False)
         self.w_v = nn.LazyLinear(1, bias=False)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, queries, keys, values, valid_lens):
-        queries, keys = self.W_q(queries), self.W_k(keys)
+    def forward(self, queries, keys, values, valid_lens=None):
         # After dimension expansion, shape of queries: (batch_size, no. of
         # queries, 1, num_hiddens) and shape of keys: (batch_size, 1, no. of
         # key-value pairs, num_hiddens). Sum them up with broadcasting
@@ -143,7 +139,7 @@ class MultiHeadAttentionFuse(nn.Module):
 
         self.linear = nn.Linear(self.args.filter_size * config.hidden_size, config.hidden_size)
 
-        self.multi_head_attention = MultiHeadAttention(config.hidden_size, config.hidden_size, config.hidden_size, config.hidden_size, 8, config.hidden_dropout_prob, args)
+        self.multi_head_attention = MultiHeadAttention(config.hidden_size, config.hidden_size, config.hidden_size, config.hidden_size, self.args.num_head, config.hidden_dropout_prob, self.args)
 
     def forward(self, features, **kwargs):
         # ------------- cnn -------------------------
