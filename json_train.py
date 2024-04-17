@@ -1,16 +1,16 @@
 import jsonlines
 
-with open("../test_dataset/BCBcsv_onlyid/test/all/train_all_2.csv") as f1:
+with open("../source_datasets/GCJ/rand/all/train_all.csv") as f1:
     for line in f1:
         dict_c = {}
         idx_list = line.strip().split(',')
         i = 1
         for idx in idx_list:
-            code = open(f"../test_dataset/id2sourcecode/{idx}.java", encoding='UTF-8').read()
+            code = open(f"../source_datasets/GCJ/googlejam4/{idx}", encoding='UTF-8').read()
             dict_c[f'idx{i}'] = idx
             dict_c[f'code{i}'] = code
             i += 1
-        with jsonlines.open('test/BCB/train_all_2.jsonl', mode='a') as writer:
+        with jsonlines.open('datasets/GCJ/train_all.jsonl', mode='a') as writer:
             writer.write(dict_c)
 
 

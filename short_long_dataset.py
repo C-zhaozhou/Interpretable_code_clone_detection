@@ -289,6 +289,17 @@ def main():
     code_path = '../source_datasets/GCJ/googlejam4'
     file_list = os.listdir(code_path)
 
+    with open("../source_datasets/GCJ/rand/all/eval_all.csv") as f1:
+        for line in f1:
+            dict_c = {}
+            idx_list = line.strip().split(',')
+            i = 1
+            for idx in idx_list:
+                code = open(f"../source_datasets/GCJ/googlejam4/{idx}", encoding='UTF-8').read()
+                dict_c[f'idx{i}'] = idx
+                dict_c[f'code{i}'] = code
+                i += 1
+
     for file in file_list:
         print(file)
         code = open(f"{code_path}/{file}", encoding='UTF-8').read()

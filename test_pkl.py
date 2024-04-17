@@ -38,7 +38,7 @@ def extract_pathtoken(source, path_sequence):
 
 
 def main():
-    output = open('test/test.pkl', 'wb')
+    output = open('datasets/test.pkl', 'wb')
     path_dict = {}
     state_dict = {}
     num_id = 0

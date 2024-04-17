@@ -42,7 +42,7 @@ import json
 from sklearn.metrics import recall_score,precision_score,f1_score
 from tqdm import tqdm, trange
 import multiprocessing
-from model_multihead_attention import Model
+from model_multihead_attention_2 import Model
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
                           BertConfig, BertForMaskedLM, BertTokenizer,
@@ -510,7 +510,7 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
     max_y = max(y)
     max_x = x[y.index(max_y)]
     plt.text(max_x, max_y, f'({max_x}, {max_y})', ha='right')
-    plt.savefig(f'./img_1/line_plot{idx}.png')
+    plt.savefig(f'./img_2/line_plot{idx}.png')
     print("eval_loss", temp_tp, temp_tn, temp_fp, temp_fn)
     result = {'recall': temp_best_recall,
               'precision': temp_best_precision,
@@ -819,10 +819,6 @@ def main():
         train_dataset = TrainDataset(tokenizer, args, args.train_data_file)
         if args.local_rank == 0:
             torch.distributed.barrier()
-
-        checkpoint_prefix = 'checkpoint-best-acc/model.bin'
-        output_dir = os.path.join("./loaded_models", '{}'.format(checkpoint_prefix))
-        model.load_state_dict(torch.load(output_dir))
 
         train(args, train_dataset, model, tokenizer)
 

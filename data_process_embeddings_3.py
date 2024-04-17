@@ -280,7 +280,7 @@ def main():
 
     model.to(args.device)
 
-    output = open('test/path_embeddings_3.pkl', 'wb')
+    output = open('datasets/path_embeddings_3.pkl', 'wb')
     path_dict = {}
     state_dict = {}
     num_id = 0
