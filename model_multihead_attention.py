@@ -177,6 +177,26 @@ class DistanceClassifier(nn.Module):
         output = self.sigmoid(x)
         return output
 
+class RobertaClassificationHead(nn.Module):
+    """Head for sentence-level classification tasks."""
+
+    def __init__(self, config, args):
+        super().__init__()
+        self.args = args
+        self.d_size = self.args.d_size
+        self.dense = nn.Linear(config.hidden_size*2, config.hidden_size)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.out_proj = nn.Linear(config.hidden_size, 2)
+
+    def forward(self, features, **kwargs):
+        # x = features[:, 0, :]  # take <s> token (equiv. to [CLS])
+        x = features.reshape(-1, 1536)
+        x = self.dropout(x)
+        x = self.dense(x)
+        x = torch.tanh(x)
+        x = self.dropout(x)
+        x = self.out_proj(x)
+        return x
 
 class Model(nn.Module):
     def __init__(self, encoder, config, tokenizer, args):
@@ -190,6 +210,7 @@ class Model(nn.Module):
 
         self.multi_head_fuse = MultiHeadAttentionFuse(config, self.args)
         self.distance_cal = DistanceClassifier(config, 2 * config.hidden_size, 2 * self.args.d_size)  # [2*768,2*128]
+        self.classifier = RobertaClassificationHead(config, args)
 
     # 计算代码表示
     def enc(self, seq_embeds):
@@ -205,17 +226,15 @@ class Model(nn.Module):
         # 计算代码表示Z
         return self.multi_head_fuse(outputs_seq)
 
-    def forward(self, anchor, positive, negative=None):
-        if negative is not None:
-            an_logits = self.enc(anchor)  # [B, 768]
-            po_logits = self.enc(positive)
-            ne_logits = self.enc(negative)
-            ap_dis = self.distance_cal(an_logits, po_logits)
-            an_dis = self.distance_cal(an_logits, ne_logits)
-
-            return ap_dis, an_dis
+    def forward(self, anchor, positive, labels):
+        an_logits = self.enc(anchor)
+        co_logits = self.enc(positive)
+        input = torch.cat((an_logits, co_logits), dim=1)
+        logits=self.classifier(input)
+        prob=F.softmax(logits)
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(logits, labels)
+            return loss, prob
         else:
-            an_logits = self.enc(anchor)
-            co_logits = self.enc(positive)
-            ac_dis = self.distance_cal(an_logits, co_logits)
-            return ac_dis
+            return prob

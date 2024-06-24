@@ -25,6 +25,7 @@ class C_CFG():
     def get_allpath(self):
 
         # # three most coverage paths
+        path_real = 10
         all_paths = []
         self.finlineno = list(set(self.finlineno))
         self.finlineno.sort(reverse=False)            # sort the exit node from the small to big
@@ -47,6 +48,8 @@ class C_CFG():
         all_paths.append(path1)
         all_nodes = set(self.G.nodes())
         node_uncover = all_nodes - set(path1)
+        if path1 == []:
+            path_real -= 1
         
         if 0 in node_uncover:
             node_uncover.remove(0)
@@ -73,6 +76,8 @@ class C_CFG():
 
         node_uncover = node_uncover-set(path2)
         all_paths.append(path2)
+        if path2 == []:
+            path_real -= 1
 
 
         coverage = -1
@@ -97,6 +102,8 @@ class C_CFG():
 
         node_uncover = node_uncover-set(path3)
         all_paths.append(path3)
+        if path3 == []:
+            path_real -= 1
 
 
         coverage = -1
@@ -121,6 +128,8 @@ class C_CFG():
 
         node_uncover = node_uncover-set(path4)
         all_paths.append(path4)
+        if path4 == []:
+            path_real -= 1
 
 
         coverage = -1
@@ -145,6 +154,8 @@ class C_CFG():
 
         node_uncover = node_uncover-set(path5)
         all_paths.append(path5)
+        if path5 == []:
+            path_real -= 1
 
 
         coverage = -1
@@ -169,6 +180,8 @@ class C_CFG():
 
         node_uncover = node_uncover-set(path6)
         all_paths.append(path6)
+        if path6 == []:
+            path_real -= 1
 
 
         coverage = -1
@@ -193,6 +206,8 @@ class C_CFG():
 
         node_uncover = node_uncover-set(path7)
         all_paths.append(path7)
+        if path7 == []:
+            path_real -= 1
 
 
         coverage = -1
@@ -217,6 +232,8 @@ class C_CFG():
 
         node_uncover = node_uncover-set(path8)
         all_paths.append(path8)
+        if path8 == []:
+            path_real -= 1
 
 
         coverage = -1
@@ -241,6 +258,8 @@ class C_CFG():
 
         node_uncover = node_uncover-set(path9)
         all_paths.append(path9)
+        if path9 == []:
+            path_real -= 1
 
 
         
@@ -261,6 +280,8 @@ class C_CFG():
         
         node_uncover = node_uncover - set(path10)
         all_paths.append(path10)
+        if path10 == []:
+            path_real -= 1
         # # --------------------------------------------------------------
 
         num_path = 0
@@ -268,7 +289,7 @@ class C_CFG():
         # 节点覆盖率
         ratio = 1-(len(node_uncover)/len(all_nodes))
         #return num_path, all_paths
-        return num_path, all_paths, len(self.dece_node), ratio
+        return num_path, all_paths, len(self.dece_node), ratio, path_real
 
     def run(self, root):
         # self.visit(root)

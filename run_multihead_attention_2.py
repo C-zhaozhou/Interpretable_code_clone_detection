@@ -820,6 +820,10 @@ def main():
         if args.local_rank == 0:
             torch.distributed.barrier()
 
+        # checkpoint_prefix = 'checkpoint-best-acc/model.bin'
+        # output_dir = os.path.join("./loaded_models", '{}'.format(checkpoint_prefix))
+        # model.load_state_dict(torch.load(output_dir))
+
         train(args, train_dataset, model, tokenizer)
 
     # Evaluation
@@ -841,6 +845,7 @@ def main():
         model.to(args.device)
         test(args, model, tokenizer)
 
+    logger.info("finished!!!")
     return results
 
 

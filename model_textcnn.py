@@ -63,7 +63,7 @@ class TextCNN(nn.Module):
     def forward(self, x):
         # x: [batch size, sent len, emb dim]
         embedded = x.permute(0, 2, 1)  # [B, L, D] -> [B, D, L]
-        conved = self.convs(embedded)  # [B, D, L] -> []
+        conved = self.convs(embedded)  # [B, D, L] -> [B,128,L+1-kernel_size]
 
         pooled = [F.max_pool1d(conv, conv.shape[2]).squeeze(2)
                   for conv in conved]
@@ -118,6 +118,21 @@ class CNNFuse(nn.Module):
         # (768,128,3,128)
         # self.linear_mlp = nn.Linear(6 * config.hidden_size, self.d_size)
         # self.linear_multi = nn.Linear(config.hidden_size, config.hidden_size)
+
+    # def forward(self, features, **kwargs):
+    #     # ------------- cnn -------------------------
+    #     x = torch.unsqueeze(features, dim=1)  # [B, L*D] -> [B, 1, D*L]
+    #     x = x.reshape(x.shape[0], -1, 768)  # [B, L, D]
+    #     outputs = self.cnn(x)                                 # ->[B, 128]
+    #     # features = self.linear_mlp(features)       # [B, L*D] -> [B, D]
+    #     x = self.dropout(outputs)
+    #     x = self.dense(x)
+    #     # ------------- cnn ----------------------
+    #
+    #     # x = torch.tanh(x)
+    #     # x = self.dropout(x)
+    #     # x = self.out_proj(x)
+    #     return x
 
     def forward(self, features, **kwargs):
         # ------------- cnn -------------------------

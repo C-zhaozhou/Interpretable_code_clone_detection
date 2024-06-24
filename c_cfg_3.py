@@ -99,8 +99,9 @@ class C_CFG():
         num_path = len(all_paths)
         # 节点覆盖率
         ratio = 1-(len(node_uncover)/len(all_nodes))
+        path_real = 3
         #return num_path, all_paths
-        return num_path, all_paths, len(self.dece_node), ratio
+        return num_path, all_paths, len(self.dece_node), ratio, path_real
 
     def run(self, root):
         # self.visit(root)

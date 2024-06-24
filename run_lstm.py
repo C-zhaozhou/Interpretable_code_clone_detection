@@ -48,6 +48,7 @@ from model_lstm import Model
 
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
+                          get_cosine_with_hard_restarts_schedule_with_warmup,
                           BertConfig, BertForMaskedLM, BertTokenizer,
                           GPT2Config, GPT2LMHeadModel, GPT2Tokenizer,
                           OpenAIGPTConfig, OpenAIGPTLMHeadModel, OpenAIGPTTokenizer,
@@ -244,6 +245,8 @@ def train(args, train_dataset, model, tokenizer):
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    # scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=t_total*0.1,
+    #                                             num_training_steps=t_total)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=t_total * 0.1,
                                                 num_training_steps=t_total)
     if args.fp16:
@@ -297,27 +300,9 @@ def train(args, train_dataset, model, tokenizer):
             # seq_inputs = batch[2].to(args.device)  # 各路径生成的ids
             anchor = batch[0].to(args.device)
             positive = batch[1].to(args.device)
-            negative = batch[2].to(args.device)
+            labels = batch[2].to(args.device)
             model.train()
-            ap_dis, an_dis = model(anchor, positive, negative)  # [Batchsize,768]
-
-            margin = 1
-            # losses = F.relu(ap_dis - an_dis + margin)
-            losses = F.relu(ap_dis - an_dis + margin) + F.relu(ap_dis - 0.5) + F.relu(0.5 - an_dis)
-            loss = losses.mean()
-
-            # 计算triplet loss
-            # cos_pos = 0.5 - (nn.CosineSimilarity(dim=1)(an_logits, po_logits) * 0.5)  # [Batchsize]
-            # cos_neg = 0.5 - (nn.CosineSimilarity(dim=1)(an_logits, ne_logits) * 0.5)
-            # margin = 1
-            # losses = F.relu(cos_pos - cos_neg + margin)   # [2]
-            # loss = losses.mean()   # tensor(1.0089)
-
-            # logger.info("**********")
-            # logger.info(f"{type(cos_pos)}")
-            # logger.info(f"{type(losses)}")
-            # logger.info(f"{type(loss)}")
-            # 2*768维向量
+            loss, logits = model(anchor, positive, labels)  # [Batchsize,768]
 
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -332,71 +317,60 @@ def train(args, train_dataset, model, tokenizer):
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-            loss = loss * args.gradient_accumulation_steps
-            # DONE 这里的loss需要求平均吗？ 不用
-            # DONE 可以求一下当前epochs的平均，方便看出整体变化趋势
+            tr_loss += loss.item()
             tr_num += 1
             train_loss += loss.item()
-            # if avg_loss == 0:
-            #     avg_loss = tr_loss
-            # avg_loss = round(train_loss/tr_num, 5)
+            if avg_loss == 0:
+                avg_loss = tr_loss
             avg_loss = round(train_loss / tr_num, 5)
             bar.set_description("epoch {} loss {}".format(idx, avg_loss))
-            global_step += 1
 
-            if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == 20000:
+            if (step + 1) % args.gradient_accumulation_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()
-                # output_flag = True
-                # avg_loss = round(np.exp((tr_loss - logging_loss) / (global_step - tr_nb)), 4)
-                # if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
-                #     logging_loss = tr_loss
-                #     tr_nb = global_step
+                global_step += 1
+                output_flag = True
+                avg_loss = round(np.exp((tr_loss - logging_loss) / (global_step - tr_nb)), 4)
+                if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
+                    logging_loss = tr_loss
+                    tr_nb = global_step
 
-                # 一个epoch学完进入以下条件
-                # if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
+                if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
 
-        if args.local_rank == -1 and args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
-            results = evaluate(args, model, tokenizer, idx, eval_when_training=True)
-            for key, value in results.items():
-                logger.info("  %s = %s", key, round(value, 4))
-            # Save model checkpoint
-        if results['F1'] > best_f1:
-            # if results['eval_acc'] > best_acc:
-            best_f1 = results['F1']
-            best_precision = results['precision']
-            best_recall = results['recall']
-            best_threshold = results['threshold']
-            logger.info("  " + "*" * 20)
-            logger.info("  Best f1:%s", round(best_f1, 4))
-            logger.info("  " + "*" * 20)
-            logger.info("  Recall:%s", best_recall)
-            logger.info("  " + "*" * 20)
-            logger.info("  Precision:%s", best_precision)
-            logger.info("  " + "*" * 20)
-            logger.info("  threshold:%s", best_threshold)
-            logger.info("  " + "*" * 20)
+                    if args.local_rank == -1 and args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
+                        results = evaluate(args, model, tokenizer, eval_when_training=True)
+                        # Save model checkpoint
 
-            checkpoint_prefix = 'checkpoint-best-acc'
-            output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-            model_to_save = model.module if hasattr(model, 'module') else model
-            output_dir = os.path.join(output_dir, '{}'.format('model.bin'))
-            torch.save(model_to_save.state_dict(), output_dir)
-            logger.info("Saving model checkpoint to %s", output_dir)
+                    if results['eval_f1'] > best_f1:
+                        best_f1 = results['eval_f1']
+                        logger.info("  " + "*" * 20)
+                        logger.info("  Best f1:%s", round(best_f1, 4))
+                        logger.info("  " + "*" * 20)
+
+                        checkpoint_prefix = 'checkpoint-best-acc'
+                        output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
+                        if not os.path.exists(output_dir):
+                            os.makedirs(output_dir)
+                        model_to_save = model.module if hasattr(model, 'module') else model
+                        output_dir = os.path.join(output_dir, '{}'.format('model.bin'))
+                        torch.save(model_to_save.state_dict(), output_dir)
+                        logger.info("Saving model checkpoint to %s", output_dir)
+        #
+        # if args.max_steps > 0 and global_step > args.max_steps:
+        #     train_iterator.close()
+        #     break
+    return global_step, tr_loss / global_step
 
 
 import matplotlib.pyplot as plt
 
 
-def evaluate(args, model, tokenizer, idx, eval_when_training=False):
+def evaluate(args, model, tokenizer, eval_when_training=False):
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_output_dir = args.output_dir
-
+    # eval_dataset = load_and_cache_examples(args, tokenizer, evaluate=True,pool=pool)
     eval_dataset = EvalDataset(tokenizer, args, args.eval_data_file)
-
     if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(eval_output_dir)
 
@@ -416,113 +390,55 @@ def evaluate(args, model, tokenizer, idx, eval_when_training=False):
     eval_loss = 0.0
     nb_eval_steps = 0
     model.eval()
-    total = []
-    # cos_right = []
-    # cos_wrong = []
+    logits = []
+    y_trues = []
     for batch in eval_dataloader:
         anchor = batch[0].to(args.device)
         positive = batch[1].to(args.device)
-        label = batch[2].to(args.device)
+        labels = batch[2].to(args.device)
         with torch.no_grad():
-            ac_dis = model(anchor, positive)
-        label = label.unsqueeze(1)
-        label_pre = torch.cat((label, ac_dis), dim=1)
-        total += label_pre.tolist()
-        # cos_right += ap_dis.tolist()
-        # cos_wrong += an_dis.tolist()
-    temp_best_f1 = 0
-    temp_best_recall = 0
-    temp_best_precision = 0
-    temp_tp = 0
-    temp_tn = 0
-    temp_fp = 0
-    temp_fn = 0
-    temp_best_threshold = 0
+            lm_loss, logit = model(anchor, positive, labels)
+            eval_loss += lm_loss.mean().item()
+            logits.append(logit.cpu().numpy())
+            y_trues.append(labels.cpu().numpy())
+        nb_eval_steps += 1
+    logits = np.concatenate(logits, 0)
+    y_trues = np.concatenate(y_trues, 0)
+    best_threshold = 0.5
+    # best_threshold=0
+    # best_f1=0
+    # for i in range(1,100):
+    #     threshold=i/100
+    #     y_preds=logits[:,1]>threshold
+    #     from sklearn.metrics import recall_score
+    #     recall=recall_score(y_trues, y_preds)
+    #     from sklearn.metrics import precision_score
+    #     precision=precision_score(y_trues, y_preds)
+    #     from sklearn.metrics import f1_score
+    #     f1=f1_score(y_trues, y_preds)
+    #     if f1>best_f1:
+    #         best_f1=f1
+    #         best_threshold=threshold
 
-    # count = 0
-    # error_count = 0
-    tp, fp, tn, fn = 0, 0, 0, 0
-    threshold = 0.5
-    for h in total:
-        if h[0] == 1:
-            if h[1] <= threshold:
-                tp += 1
-            else:
-                fn += 1
-        if h[0] == 0:
-            if h[1] <= threshold:
-                fp += 1
-            else:
-                tn += 1
-    precision = tp / (tp + fp)
-    correct_recall = tp / (tp + fn)
+    y_preds = logits[:, 1] > best_threshold
+    from sklearn.metrics import recall_score
+    recall = recall_score(y_trues, y_preds)
+    from sklearn.metrics import precision_score
+    precision = precision_score(y_trues, y_preds)
+    from sklearn.metrics import f1_score
+    f1 = f1_score(y_trues, y_preds)
+    result = {
+        "eval_recall": float(recall),
+        "eval_precision": float(precision),
+        "eval_f1": float(f1),
+        "eval_threshold": best_threshold,
 
-    # for h in cos_right:
-    #     if h[0] <= threshold:
-    #         count += 1  # 实测克隆对个数TP
-    # total = len(cos_right)  # 所有潜在克隆对（应是克隆对）个数TP+FN
-    # for h in cos_wrong:
-    #     if h[0] > threshold:
-    #         error_count += 1  # 实测非克隆对个数TN
-    # error_total = len(cos_wrong)  # 所有潜在非克隆对（应是非克隆对）个数TN+FP
-    # correct_recall = count / total
-    # precision = count / (error_total - error_count + count)  # error_total-error_count：潜在非克隆对中的克隆对数目
-    F1 = 2 * precision * correct_recall / (precision + correct_recall)
-    results = {'recall': correct_recall,
-               'precision': precision,
-               'F1': F1,
-               'threshold': 0.5}
-    for key, value in results.items():
-        logger.info("threshold = 0.5 \t %s = %s", key, round(value, 4))
+    }
 
-    x = []
-    y = []
-    for k in range(1, 100):
-        threshold = k / 100
-        tp, fp, tn, fn = 0, 0, 0, 0
-        for h in total:
-            if h[0] == 1:
-                if h[1] <= threshold:
-                    tp += 1
-                else:
-                    fn += 1
-            if h[0] == 0:
-                if h[1] <= threshold:
-                    fp += 1
-                else:
-                    tn += 1
-        if tp + fp == 0:
-            continue
-        precision = tp / (tp + fp)
-        if tp + fn == 0:
-            continue
-        correct_recall = tp / (tp + fn)
+    logger.info("***** Eval results *****")
+    for key in sorted(result.keys()):
+        logger.info("  %s = %s", key, str(round(result[key], 4)))
 
-        if precision + correct_recall == 0:
-            continue
-        F1 = 2 * precision * correct_recall / (precision + correct_recall)
-        x.append(k)
-        y.append(F1)
-
-        if F1 > temp_best_f1:
-            temp_best_f1 = F1
-            temp_best_recall = correct_recall
-            temp_best_precision = precision
-            temp_best_threshold = threshold
-            temp_tp = tp
-            temp_tn = tn
-            temp_fp = fp
-            temp_fn = fn
-    plt.plot(x, y, marker='o', linestyle='-', markersize=2)
-    max_y = max(y)
-    max_x = x[y.index(max_y)]
-    plt.text(max_x, max_y, f'({max_x}, {max_y})', ha='right')
-    plt.savefig(f'line_plot{idx}.png')
-    print("eval_loss", temp_tp, temp_tn, temp_fp, temp_fn)
-    result = {'recall': temp_best_recall,
-              'precision': temp_best_precision,
-              'F1': temp_best_f1,
-              'threshold': temp_best_threshold}
     return result
 
 
@@ -734,6 +650,7 @@ def main():
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
     parser.add_argument('--cnn_size', type=int, default=1, help="For cnn size.")
     parser.add_argument('--filter_size', type=int, default=2, help="For cnn filter size.")
+    parser.add_argument('--lambda_reg', type=float, default=0, help="For norm.")
 
     parser.add_argument('--d_size', type=int, default=128, help="For cnn filter size.")
     parser.add_argument('--pkl_file', type=str, default='', help='for dataset path pkl file')
@@ -821,7 +738,7 @@ def main():
         if args.local_rank not in [-1, 0]:
             torch.distributed.barrier()  # Barrier to make sure only the first process in distributed training process the dataset, and the others will use the cache
 
-        train_dataset = TrainDataset(tokenizer, args, args.train_data_file)
+        train_dataset = EvalDataset(tokenizer, args, args.train_data_file)
         if args.local_rank == 0:
             torch.distributed.barrier()
 
@@ -832,9 +749,9 @@ def main():
     if args.do_eval and args.local_rank in [-1, 0]:
         checkpoint_prefix = 'checkpoint-best-acc/model.bin'
         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))
-        # model.load_state_dict(torch.load(output_dir))
+        model.load_state_dict(torch.load(output_dir))
         model.to(args.device)
-        result = evaluate(args, model, tokenizer, 8)
+        result = evaluate(args, model, tokenizer)
         logger.info("***** Eval results *****")
         for key in sorted(result.keys()):
             logger.info("  %s = %s", key, str(round(result[key], 4)))
